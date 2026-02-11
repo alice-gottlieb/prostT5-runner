@@ -1,0 +1,10 @@
+*.tar.gz
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+*.pyc
+*.pyo
+foldseek/
+.python_version
+old_getting_started_attempts/

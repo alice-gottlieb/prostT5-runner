@@ -28,13 +28,17 @@ nvidia-nccl-cu12==2.21.5
 nvidia-nvjitlink-cu12==12.4.127
 nvidia-nvtx-cu12==12.4.127
 packaging==26.0
+pandas==2.3.2
 protobuf==6.33.4
+python-dateutil==2.9.0.post0
+pytz==2025.2
 pyyaml==6.0.3
 regex==2026.1.15
 safetensors==0.7.0
 sentencepiece==0.2.0
 setuptools==80.10.2
 shellingham==1.5.4
+six==1.17.0
 sympy==1.13.1
 tokenizers==0.22.2
 torch==2.6.0
@@ -43,3 +47,4 @@ transformers==5.0.0
 triton==3.2.0
 typer-slim==0.21.1
 typing-extensions==4.15.0
+tzdata==2025.3

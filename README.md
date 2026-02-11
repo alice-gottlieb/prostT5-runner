@@ -3,6 +3,17 @@ Important: When installing packages, set `uv pip install --only-binary=:all: [pa
 
 Important 2: Run all python files with `uv run python [name of file].py`. This is the only way I've found so far to get uv to correctly apply dependencies.
 
+Run installs as follows:
+```bash
+uv pip install --only-binary=:all: numpy
+uv pip install --only-binary=:all: transformers
+uv pip install --only-binary=:all: sentencepiece
+uv pip install --only-binary=:all: protobuf
+uv pip install --only-binary=:all: pandas
+```
+
+If there are problems with python, set version to `uv python install 3.12`
+
 1.  Install uv
 2. Activate uv venv provided
 3. Install foldseek 

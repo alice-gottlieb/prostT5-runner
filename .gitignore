@@ -8,3 +8,4 @@ __pycache__/
 foldseek/
 .python_version
 old_getting_started_attempts/
+.vscode/*

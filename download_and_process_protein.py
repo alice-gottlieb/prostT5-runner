@@ -195,10 +195,13 @@ def run_foldseek(query_file: str, target_db: str = None, output_dir: str = None,
     if foldseek_path:
         # Check if it's a directory (foldseek installation folder)
         if os.path.isdir(foldseek_path):
-            foldseek_bin = os.path.join(foldseek_path, "foldseek")
+            foldseek_bin = os.path.join(foldseek_path, "bin", "foldseek")
             # Check if it exists
             if not os.path.exists(foldseek_bin):
-                raise FileNotFoundError(f"foldseek binary not found in {foldseek_path}. Expected: {foldseek_bin}")
+                # Try without bin subdirectory
+                foldseek_bin = os.path.join(foldseek_path, "foldseek")
+                if not os.path.exists(foldseek_bin):
+                    raise FileNotFoundError(f"foldseek binary not found in {foldseek_path}. Expected: {os.path.join(foldseek_path, 'bin', 'foldseek')} or {os.path.join(foldseek_path, 'foldseek')}")
         else:
             # Assume it's a full path to the binary
             foldseek_bin = foldseek_path
@@ -208,16 +211,25 @@ def run_foldseek(query_file: str, target_db: str = None, output_dir: str = None,
         # Use foldseek from PATH
         foldseek_bin = "foldseek"
     
-    # Build foldseek command
-    cmd = [foldseek_bin, "easy-search", query_file]
+    # Determine database path
+    if target_db is None:
+        target_db = "PDB"
     
-    if target_db:
-        cmd.append(target_db)
+    # Validate that the database exists (if it's a file path, not a named database)
+    if os.path.sep in target_db or target_db.startswith("."):
+        # It's a file path
+        if not os.path.exists(target_db):
+            raise FileNotFoundError(f"Foldseek database not found at {target_db}")
     else:
-        # Search against PDB database (requires foldseek setup)
-        cmd.append("PDB")
+        # It's a named database (like "PDB") - foldseek will handle it
+        # But warn the user if it might not exist
+        if target_db == "PDB":
+            print(f"Note: Using '{target_db}' database. If this doesn't exist, you may need to:")
+            print(f"  1. Download it with: foldseek databases {target_db} ./pdb_database")
+            print(f"  2. Or provide a custom database with: --foldseek-db /path/to/database")
     
-    cmd.extend([result_file, "/tmp/foldseek_tmp"])
+    # Build foldseek command
+    cmd = [foldseek_bin, "easy-search", query_file, target_db, result_file, "/tmp/foldseek_tmp"]
     
     print(f"Running foldseek command: {' '.join(cmd)}")
     
@@ -229,12 +241,17 @@ def run_foldseek(query_file: str, target_db: str = None, output_dir: str = None,
             print("Warnings/Info:", result.stderr)
     except subprocess.CalledProcessError as e:
         print(f"Error running foldseek: {e.stderr}")
+        print("\nCommon issues:")
+        print(f"  - Database '{target_db}' does not exist")
+        print(f"  - Try downloading it first: foldseek databases {target_db} ./pdb_database")
+        print(f"  - Or provide a custom database: --foldseek-db /path/to/database")
         raise
     except FileNotFoundError as e:
         print(f"Error: {e}")
         print("\nPlease either:")
         print("  1. Install foldseek: https://github.com/steineggerlab/foldseek")
         print("  2. Provide the path with --foldseek-path /path/to/foldseek/folder")
+        print("  3. Download a database: foldseek databases <name> <output_path>")
         raise
     
     # List output files
@@ -271,7 +288,7 @@ def main():
         "--foldseek-db",
         type=str,
         default=None,
-        help="Foldseek database path or name"
+        help="Foldseek database path or name (default: 'PDB'). Use 'none' to skip foldseek."
     )
     parser.add_argument(
         "--foldseek-path",
@@ -322,8 +339,19 @@ def main():
     )
     
     # Step 5: Run foldseek (optional)
-    if not args.skip_foldseek:
-        run_foldseek(three_di_fasta, target_db=args.foldseek_db, output_dir=args.output_dir, foldseek_path=args.foldseek_path)
+    if args.skip_foldseek or args.foldseek_db == "none":
+        print("Skipping foldseek step")
+    else:
+        try:
+            run_foldseek(three_di_fasta, target_db=args.foldseek_db, output_dir=args.output_dir, foldseek_path=args.foldseek_path)
+        except (FileNotFoundError, subprocess.CalledProcessError) as e:
+            print(f"\nFoldseek search failed. 3Di sequences saved to {three_di_fasta}")
+            print("You can run foldseek manually later with your database.")
+            print(f"\nTo download a database, run:")
+            print(f"  foldseek databases <database_name> <output_path>")
+            print(f"Then run foldseek:")
+            print(f"  foldseek easy-search {three_di_fasta} <database_path> results tmp")
+            raise
     
     # Save metadata
     metadata = {

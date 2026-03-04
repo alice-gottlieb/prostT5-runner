@@ -1,17 +1,21 @@
 """
-Batch download protein FASTAs from NCBI, convert to 3Di codes with ProstT5,
-then run an all-vs-all foldseek search across all sequences.
+Batch download whole-species protein FASTA (.faa) files from NCBI Datasets,
+convert all sequences to 3Di codes with ProstT5, then run an all-vs-all
+foldseek search across all sequences.
 
-Input:  a text file with one NCBI accession ID per line
-Output: per-sequence 3Di FASTA files, a combined 3Di FASTA, and foldseek results
+Input:  a text file with one NCBI genome assembly accession (GCF_* or GCA_*)
+        per line
+Output: per-assembly .faa files, a combined 3Di FASTA, and foldseek results
 """
 
 import re
+import io
 import time
 import json
 import os
 import subprocess
 import argparse
+import zipfile
 import requests
 import torch
 from pathlib import Path
@@ -24,47 +28,73 @@ from transformers import T5Tokenizer, AutoModelForSeq2SeqLM
 # ---------------------------------------------------------------------------
 
 def read_accessions(accession_file: str) -> list[str]:
-    """Read accession IDs from a text file, one per line. Ignores blank lines and comments."""
+    """Read genome assembly accessions from a text file, one per line.
+    Ignores blank lines and comments (#)."""
     accessions = []
     with open(accession_file) as f:
         for line in f:
             line = line.strip()
             if line and not line.startswith("#"):
                 accessions.append(line)
-    print(f"Loaded {len(accessions)} accession IDs from {accession_file}")
+    print(f"Loaded {len(accessions)} assembly accessions from {accession_file}")
     return accessions
 
 
-def download_fasta(accession: str, output_path: str, ncbi_api_key: str = None) -> str | None:
+def download_species_faa(
+    assembly_accession: str,
+    output_path: str,
+    ncbi_api_key: str = None,
+) -> str | None:
     """
-    Download a single protein FASTA from NCBI Entrez.
-    Returns the output path on success, None on failure.
+    Download the full protein FASTA (.faa) for a genome assembly using the
+    NCBI Datasets API v2.
+
+    The API returns a ZIP whose relevant entry is:
+      ncbi_dataset/data/<accession>/protein.faa
+
+    Args:
+        assembly_accession: A RefSeq (GCF_*) or GenBank (GCA_*) assembly accession.
+        output_path: Where to write the extracted .faa file.
+        ncbi_api_key: Optional NCBI API key (increases rate limit to 10 req/s).
+
+    Returns:
+        output_path on success, None on failure.
     """
-    params = {
-        "db": "protein",
-        "id": accession,
-        "rettype": "fasta",
-        "retmode": "text",
-    }
+    url = (
+        "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/"
+        f"{assembly_accession}/download"
+    )
+    params = {"include_annotation_type": "PROT_FASTA"}
+    headers = {"Accept": "application/zip"}
     if ncbi_api_key:
-        params["api_key"] = ncbi_api_key
+        headers["api-key"] = ncbi_api_key
 
     try:
-        resp = requests.get(
-            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
-            params=params,
-            timeout=30,
-        )
+        resp = requests.get(url, params=params, headers=headers, timeout=120, stream=True)
         resp.raise_for_status()
-        text = resp.text.strip()
-        if not text or text.startswith("Error"):
-            print(f"  [WARN] {accession}: unexpected response — {text[:80]}")
-            return None
-        with open(output_path, "w") as f:
-            f.write(text + "\n")
+
+        # Load the ZIP from memory and extract the protein FASTA
+        zip_bytes = io.BytesIO(resp.content)
+        with zipfile.ZipFile(zip_bytes) as zf:
+            # Find the protein.faa entry (may be nested under the accession dir)
+            faa_entries = [
+                n for n in zf.namelist()
+                if n.endswith("protein.faa")
+            ]
+            if not faa_entries:
+                print(f"  [WARN] {assembly_accession}: no protein.faa found in downloaded zip")
+                return None
+
+            with zf.open(faa_entries[0]) as src, open(output_path, "wb") as dst:
+                dst.write(src.read())
+
         return output_path
+
     except requests.RequestException as e:
-        print(f"  [WARN] {accession}: download failed — {e}")
+        print(f"  [WARN] {assembly_accession}: download failed — {e}")
+        return None
+    except zipfile.BadZipFile as e:
+        print(f"  [WARN] {assembly_accession}: bad zip response — {e}")
         return None
 
 
@@ -75,13 +105,13 @@ def batch_download(
     delay: float = 0.34,
 ) -> dict[str, str]:
     """
-    Download FASTAs for all accessions.
+    Download .faa files for all genome assembly accessions.
 
     Respects NCBI rate limits:
       - Without API key: ~3 req/s  -> delay >= 0.34 s
       - With API key:    ~10 req/s -> delay >= 0.10 s
 
-    Returns a mapping of {accession: fasta_path} for successful downloads.
+    Returns a mapping of {accession: faa_path} for successful downloads.
     """
     os.makedirs(fasta_dir, exist_ok=True)
     if ncbi_api_key and delay > 0.10:
@@ -89,21 +119,23 @@ def batch_download(
 
     downloaded: dict[str, str] = {}
     for i, acc in enumerate(accessions):
-        out = os.path.join(fasta_dir, f"{acc}.fasta")
+        out = os.path.join(fasta_dir, f"{acc}.faa")
         if os.path.exists(out):
             print(f"  [{i+1}/{len(accessions)}] {acc}: already downloaded, skipping")
             downloaded[acc] = out
             continue
 
-        print(f"  [{i+1}/{len(accessions)}] {acc}: downloading...")
-        path = download_fasta(acc, out, ncbi_api_key)
+        print(f"  [{i+1}/{len(accessions)}] {acc}: downloading protein FASTA...")
+        path = download_species_faa(acc, out, ncbi_api_key)
         if path:
             downloaded[acc] = path
+            record_count = sum(1 for _ in SeqIO.parse(path, "fasta"))
+            print(f"  [{i+1}/{len(accessions)}] {acc}: saved {record_count} proteins -> {out}")
 
         if i < len(accessions) - 1:
             time.sleep(delay)
 
-    print(f"\nDownloaded {len(downloaded)}/{len(accessions)} sequences")
+    print(f"\nDownloaded {len(downloaded)}/{len(accessions)} assemblies")
     return downloaded
 
 
@@ -278,13 +310,13 @@ def run_foldseek_all_vs_all(
 def main():
     parser = argparse.ArgumentParser(
         description=(
-            "Batch download NCBI protein FASTAs, convert to 3Di codes with ProstT5, "
-            "then run all-vs-all foldseek search."
+            "Batch download whole-species protein FASTAs (.faa) from NCBI Datasets, "
+            "convert to 3Di codes with ProstT5, then run all-vs-all foldseek search."
         )
     )
     parser.add_argument(
         "accession_file",
-        help="Text file with one NCBI protein accession ID per line",
+        help="Text file with one NCBI genome assembly accession (GCF_* or GCA_*) per line",
     )
     parser.add_argument(
         "--output-dir", "-o",
@@ -372,8 +404,8 @@ def main():
     # 7. Save metadata
     metadata = {
         "accession_file": args.accession_file,
-        "accessions_requested": accessions,
-        "accessions_downloaded": list(downloaded.keys()),
+        "assemblies_requested": accessions,
+        "assemblies_downloaded": list(downloaded.keys()),
         "num_sequences": len(sequences),
         "three_di_fasta": str(three_di_fasta),
         "foldseek_results": result_file,

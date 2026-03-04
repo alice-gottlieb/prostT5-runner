@@ -235,8 +235,8 @@ def generate_3di_codes(
             out = model.generate(
                 ids.input_ids,
                 attention_mask=ids.attention_mask,
-                max_length=seq_len,
-                min_length=seq_len,
+                max_length=seq_len + 1,
+                min_length=seq_len + 1,
                 **gen_kwargs,
             )
 

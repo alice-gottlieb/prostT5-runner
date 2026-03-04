@@ -172,7 +172,7 @@ def save_3di_fasta(three_di_codes: dict, output_file: str = "sequences_3di.fasta
     return output_file
 
 
-def run_foldseek(query_file: str, target_db: str = None, output_dir: str = None) -> str:
+def run_foldseek(query_file: str, target_db: str = None, output_dir: str = None, foldseek_path: str = None) -> str:
     """
     Run foldseek to search 3Di sequences against a database.
     
@@ -180,6 +180,7 @@ def run_foldseek(query_file: str, target_db: str = None, output_dir: str = None)
         query_file: Path to the query 3Di FASTA file
         target_db: Path to the target database. If None, searches against environment default.
         output_dir: Output directory for foldseek results
+        foldseek_path: Path to foldseek binary or installation directory. If None, uses 'foldseek' from PATH.
     
     Returns:
         Path to the results
@@ -190,8 +191,25 @@ def run_foldseek(query_file: str, target_db: str = None, output_dir: str = None)
     os.makedirs(output_dir, exist_ok=True)
     result_file = os.path.join(output_dir, "search_results")
     
+    # Determine foldseek executable path
+    if foldseek_path:
+        # Check if it's a directory (foldseek installation folder)
+        if os.path.isdir(foldseek_path):
+            foldseek_bin = os.path.join(foldseek_path, "foldseek")
+            # Check if it exists
+            if not os.path.exists(foldseek_bin):
+                raise FileNotFoundError(f"foldseek binary not found in {foldseek_path}. Expected: {foldseek_bin}")
+        else:
+            # Assume it's a full path to the binary
+            foldseek_bin = foldseek_path
+            if not os.path.exists(foldseek_bin):
+                raise FileNotFoundError(f"foldseek binary not found at {foldseek_bin}")
+    else:
+        # Use foldseek from PATH
+        foldseek_bin = "foldseek"
+    
     # Build foldseek command
-    cmd = ["foldseek", "easy-search", query_file]
+    cmd = [foldseek_bin, "easy-search", query_file]
     
     if target_db:
         cmd.append(target_db)
@@ -212,9 +230,11 @@ def run_foldseek(query_file: str, target_db: str = None, output_dir: str = None)
     except subprocess.CalledProcessError as e:
         print(f"Error running foldseek: {e.stderr}")
         raise
-    except FileNotFoundError:
-        print("Error: foldseek is not installed or not in PATH.")
-        print("Please install foldseek: https://github.com/steineggerlab/foldseek")
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        print("\nPlease either:")
+        print("  1. Install foldseek: https://github.com/steineggerlab/foldseek")
+        print("  2. Provide the path with --foldseek-path /path/to/foldseek/folder")
         raise
     
     # List output files
@@ -252,6 +272,12 @@ def main():
         type=str,
         default=None,
         help="Foldseek database path or name"
+    )
+    parser.add_argument(
+        "--foldseek-path",
+        type=str,
+        default=None,
+        help="Path to foldseek binary or installation directory (e.g., /path/to/foldseek or /path/to/foldseek/folder)"
     )
     parser.add_argument(
         "--device",
@@ -297,7 +323,7 @@ def main():
     
     # Step 5: Run foldseek (optional)
     if not args.skip_foldseek:
-        run_foldseek(three_di_fasta, target_db=args.foldseek_db, output_dir=args.output_dir)
+        run_foldseek(three_di_fasta, target_db=args.foldseek_db, output_dir=args.output_dir, foldseek_path=args.foldseek_path)
     
     # Save metadata
     metadata = {

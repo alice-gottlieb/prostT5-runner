@@ -204,15 +204,12 @@ def generate_3di_codes(
         print(f"Saving model weights to {model_dir} for future runs...")
         tokenizer.save_pretrained(model_dir)
         model.save_pretrained(model_dir)
-    model.float()
+    model.half() if device.type == "cuda" else model.float()
     model.eval()
 
     gen_kwargs = {
-        "do_sample": True,
+        "do_sample": False,
         "num_beams": 3,
-        "top_p": 0.95,
-        "temperature": 1.2,
-        "top_k": 6,
         "repetition_penalty": 1.2,
     }
 

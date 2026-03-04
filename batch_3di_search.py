@@ -164,12 +164,19 @@ def generate_3di_codes(
     sequences: list[tuple[str, str]],
     device: str = None,
     batch_size: int = 1,
+    model_dir: str = None,
 ) -> dict[str, str]:
     """
     Convert amino acid sequences to 3Di codes using ProstT5.
 
     Loads the model once and processes sequences one at a time (ProstT5
     requires per-sequence length constraints for min/max_length).
+
+    Args:
+        model_dir: Local directory to load weights from (if it already contains
+                   a saved model) or save weights to after downloading. If None,
+                   weights are downloaded fresh each run into HuggingFace's
+                   default cache (~/.cache/huggingface/).
 
     Returns a dict mapping seq_id -> 3Di string.
     """
@@ -179,10 +186,25 @@ def generate_3di_codes(
         device = torch.device(device)
 
     print(f"Using device: {device}")
-    print("Loading ProstT5 model and tokenizer...")
-    tokenizer = T5Tokenizer.from_pretrained("Rostlab/ProstT5", do_lower_case=False)
-    model = AutoModelForSeq2SeqLM.from_pretrained("Rostlab/ProstT5").to(device)
-    model.float() if device.type == "cpu" else model.half()
+
+    # Determine whether to load from a local directory or download from HuggingFace
+    model_source = "Rostlab/ProstT5"
+    if model_dir and os.path.isfile(os.path.join(model_dir, "config.json")):
+        model_source = model_dir
+        print(f"Loading ProstT5 from local directory: {model_dir}")
+    else:
+        print("Loading ProstT5 model and tokenizer from HuggingFace...")
+
+    tokenizer = T5Tokenizer.from_pretrained(model_source, do_lower_case=False)
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_source).to(device)
+
+    # Save weights locally for future runs if a directory was specified but didn't exist yet
+    if model_dir and model_source != model_dir:
+        os.makedirs(model_dir, exist_ok=True)
+        print(f"Saving model weights to {model_dir} for future runs...")
+        tokenizer.save_pretrained(model_dir)
+        model.save_pretrained(model_dir)
+    model.float()
     model.eval()
 
     gen_kwargs = {
@@ -335,6 +357,14 @@ def main():
         help="Device for ProstT5 inference (auto-detected if not set)",
     )
     parser.add_argument(
+        "--model-dir",
+        default=None,
+        help=(
+            "Directory to save/load ProstT5 weights. "
+            "First run downloads and saves here; subsequent runs load from disk."
+        ),
+    )
+    parser.add_argument(
         "--foldseek-path",
         default=None,
         help="Path to foldseek binary or installation directory",
@@ -377,7 +407,7 @@ def main():
 
     # 4. Generate 3Di codes
     print("\n--- Generating 3Di codes ---")
-    three_di_codes = generate_3di_codes(sequences, device=args.device)
+    three_di_codes = generate_3di_codes(sequences, device=args.device, model_dir=args.model_dir)
 
     # 5. Save combined 3Di FASTA
     print("\n--- Saving 3Di FASTA ---")

@@ -28,14 +28,49 @@ Example usages:
 
 import argparse
 import csv
+import io
 import os
 import shutil
 import subprocess
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 
+import requests
 from Bio import SeqIO
+
+
+def download_species_faa(
+    assembly_accession: str,
+    output_path: str,
+    ncbi_api_key: str = None,
+) -> str | None:
+    """Download the full protein FASTA (.faa) for a genome assembly."""
+    url = (
+        "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/"
+        f"{assembly_accession}/download"
+    )
+    params = {"include_annotation_type": "PROT_FASTA"}
+    headers = {"Accept": "application/zip"}
+    if ncbi_api_key:
+        headers["api-key"] = ncbi_api_key
+
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=120, stream=True)
+        resp.raise_for_status()
+        zip_bytes = io.BytesIO(resp.content)
+        with zipfile.ZipFile(zip_bytes) as zf:
+            faa_entries = [n for n in zf.namelist() if n.endswith("protein.faa")]
+            if not faa_entries:
+                print(f"  [WARN] {assembly_accession}: no protein.faa in zip")
+                return None
+            with zf.open(faa_entries[0]) as src, open(output_path, "wb") as dst:
+                dst.write(src.read())
+        return output_path
+    except (requests.RequestException, zipfile.BadZipFile) as e:
+        print(f"  [WARN] {assembly_accession}: download failed — {e}")
+        return None
 
 
 def resolve_foldseek_bin(foldseek_path: str = None) -> str:
@@ -158,8 +193,12 @@ def main():
         "--fasta-dir", default=None,
         help=(
             "Directory containing pre-downloaded .faa files named {accession}.faa. "
-            "If not provided, looks in batch_output/fastas/ then tries downloading."
+            "If not provided, looks in common output directories then downloads missing ones."
         ),
+    )
+    parser.add_argument(
+        "--ncbi-api-key", default=None,
+        help="NCBI API key for higher download rate limits (optional)",
     )
     parser.add_argument(
         "--skip-search", action="store_true",
@@ -181,26 +220,48 @@ def main():
             if line and not line.startswith("#"):
                 accessions.append(line)
 
-    # Locate FASTA files
+    # Locate FASTA files, downloading any that are missing
     fasta_dirs = [
         args.fasta_dir,
         "batch_output/fastas",
         "results_fs_only_full_fs_compare/fastas",
     ]
+    download_dir = args.fasta_dir or "benchmark_fastas"
     fasta_paths: dict[str, str] = {}
+    to_download: list[str] = []
+
     for acc in accessions:
+        found = False
         for d in fasta_dirs:
             if d is None:
                 continue
             candidate = os.path.join(d, f"{acc}.faa")
             if os.path.exists(candidate):
                 fasta_paths[acc] = candidate
+                found = True
                 break
-        if acc not in fasta_paths:
-            print(f"  [WARN] No .faa file found for {acc}, skipping")
+        if not found:
+            to_download.append(acc)
+
+    if to_download:
+        os.makedirs(download_dir, exist_ok=True)
+        delay = 0.10 if args.ncbi_api_key else 0.34
+        print(f"Downloading {len(to_download)} missing FASTA file(s) to {download_dir}/...")
+        for i, acc in enumerate(to_download):
+            out = os.path.join(download_dir, f"{acc}.faa")
+            print(f"  [{i+1}/{len(to_download)}] {acc}: downloading...")
+            path = download_species_faa(acc, out, args.ncbi_api_key)
+            if path:
+                fasta_paths[acc] = path
+                n = sum(1 for _ in SeqIO.parse(path, "fasta"))
+                print(f"  [{i+1}/{len(to_download)}] {acc}: saved {n} proteins")
+            else:
+                print(f"  [{i+1}/{len(to_download)}] {acc}: FAILED, skipping")
+            if i < len(to_download) - 1:
+                time.sleep(delay)
 
     if not fasta_paths:
-        print("No FASTA files found. Download them first with batch_3di_foldseek.py.")
+        print("No FASTA files found or downloaded.")
         return
 
     # Compute genome sizes

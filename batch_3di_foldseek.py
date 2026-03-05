@@ -275,6 +275,7 @@ def generate_3di_with_foldseek(
     prostt5_weights: str = None,
     use_gpu: bool = False,
     threads: int = 1,
+    prostt5_split_length: int = None,
 ) -> tuple[str, str]:
     """
     Use foldseek createdb with --prostt5-model to predict 3Di codes from
@@ -309,6 +310,8 @@ def generate_3di_with_foldseek(
         cmd.extend(["--prostt5-model", prostt5_weights])
     if use_gpu:
         cmd.extend(["--gpu", "1"])
+    if prostt5_split_length is not None:
+        cmd.extend(["-prostt5SplitLength", str(prostt5_split_length)])
 
     _run(cmd, "Creating foldseek database with 3Di prediction")
 
@@ -432,6 +435,12 @@ def main():
         help="Use GPU for ProstT5 inference (--gpu 1)",
     )
     parser.add_argument(
+        "--prostt5-split-length",
+        type=int, default=None,
+        help="Max sequence length before splitting into multiple runs "
+             "(-prostt5SplitLength). Shorter values reduce peak VRAM usage.",
+    )
+    parser.add_argument(
         "--threads", "-t",
         type=int,
         default=1,
@@ -498,6 +507,7 @@ def main():
         prostt5_weights=prostt5_weights,
         use_gpu=args.gpu,
         threads=args.threads,
+        prostt5_split_length=args.prostt5_split_length,
     )
 
     # 7. Foldseek all-vs-all

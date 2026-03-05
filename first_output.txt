@@ -1,0 +1,114 @@
+[aliceg@g11 prostT5-runner]$ uv run python batch_3di_foldseek.py assemblies.txt --foldseek-path foldseek/bin/foldseek --prostt5-weights ~/prostT5-runner/prostt5_wei$
+hts/prostt5/prostt5-f16.gguf -o results_fs_only_full_fs_compare --gpu --threads 8                                                                                    
+Loaded 2 assembly accessions from assemblies.txt
+
+--- Downloading FASTAs ---
+  [1/2] GCF_000166935.1: already downloaded, skipping
+  [2/2] GCF_000006945.2: already downloaded, skipping
+
+Downloaded 2/2 assemblies
+
+--- Parsing sequences ---
+Parsed 5866 total sequences from 2 files
+
+--- Combining sequences ---
+Combined 5866 sequences into results_fs_only_full_fs_compare/combined_aa.fasta
+
+--- Generating 3Di codes via foldseek ---
+
+Creating foldseek database with 3Di prediction: foldseek/bin/foldseek createdb results_fs_only_full_fs_compare/combined_aa.fasta results_fs_only_full_fs_compare/fold
+seek_db/sequenceDB --threads 8 --prostt5-model /u/home/a/aliceg/prostT5-runner/prostt5_weights/prostt5/prostt5-f16.gguf --gpu 1
+results_fs_only_full_fs_compare/foldseek_db/sequenceDB exists and will be overwritten
+results_fs_only_full_fs_compare/foldseek_db/sequenceDB exists and will be overwritten
+createdb results_fs_only_full_fs_compare/combined_aa.fasta results_fs_only_full_fs_compare/foldseek_db/sequenceDB --threads 8 --prostt5-model /u/home/a/aliceg/prost$
+5-runner/prostt5_weights/prostt5/prostt5-f16.gguf 
+
+MMseqs Version:                 24020d257933c362dd1c22fd64cf478f89d5efc6
+Use GPU                         0
+Path to ProstT5                 /u/home/a/aliceg/prostT5-runner/prostt5_weights/prostt5/prostt5-f16.gguf
+Chain name mode                 0
+Model name mode                 0
+Createdb extraction mode        0
+Interface distance threshold    10
+Write mapping file              0
+Write Foldcomp                  0
+Mask b-factor threshold         0
+Coord store mode                2
+Write lookup file               1
+Input format                    0
+File Inclusion Regex            .*
+File Exclusion Regex            ^$
+Threads                         8
+Ve
+
+Linking headers to 3Di database: foldseek/bin/foldseek lndb results_fs_only_full_fs_compare/foldseek_db/sequenceDB_h results_fs_only_full_fs_compare/foldseek_db/seq$
+enceDB_ss_h
+lndb results_fs_only_full_fs_compare/foldseek_db/sequenceDB_h results_fs_only_full_fs_compare/foldseek_db/sequenceDB_ss_h 
+
+MMseqs Version: 24020d257933c362dd1c22fd64cf478f89d5efc6
+Verbosity       3
+
+Time for processing: 0h 0m 0s 9ms
+
+
+Extracting 3Di codes to FASTA: foldseek/bin/foldseek convert2fasta results_fs_only_full_fs_compare/foldseek_db/sequenceDB_ss results_fs_only_full_fs_compare/foldsee$
+_db/all_sequences_3di.fasta
+convert2fasta results_fs_only_full_fs_compare/foldseek_db/sequenceDB_ss results_fs_only_full_fs_compare/foldseek_db/all_sequences_3di.fasta 
+
+MMseqs Version: 24020d257933c362dd1c22fd64cf478f89d5efc6
+Use header DB   false
+Verbosity       3
+
+Start writing file to results_fs_only_full_fs_compare/foldseek_db/all_sequences_3di.fasta
+Time for processing: 0h 0m 0s 57ms
+
+Saved 5866 3Di sequences to results_fs_only_full_fs_compare/foldseek_db/all_sequences_3di.fasta
+
+--- Running foldseek all-vs-all ---
+
+Running foldseek all-vs-all search: foldseek/bin/foldseek search results_fs_only_full_fs_compare/foldseek_db/sequenceDB results_fs_only_full_fs_compare/foldseek_db/s
+equenceDB results_fs_only_full_fs_compare/foldseek_results/result results_fs_only_full_fs_compare/foldseek_results/tmp_search --threads 8
+Create directory results_fs_only_full_fs_compare/foldseek_results/tmp_search
+search results_fs_only_full_fs_compare/foldseek_db/sequenceDB results_fs_only_full_fs_compare/foldseek_db/sequenceDB results_fs_only_full_fs_compare/foldseek_results/result results_fs_only_full_fs_compare/foldseek_results/tmp_search --threads 8 
+
+MMseqs Version:                         24020d257933c362dd1c22fd64cf478f89d5efc6
+TMscore threshold                       0
+TMscore threshold mode                  0
+LDDT threshold                          0
+Sort by structure bit score             1
+Alignment type                          2
+Exact TMscore                           0
+Substitution matrix                     aa:3di.out,nucl:3di.out
+Add backtrace                           false
+Alignment mode                          3
+Alignment mode                          0
+E-value threshold                       10
+Seq. id. threshold                      0
+Min alignment length                    0
+Seq. id. mode                           0
+Alternative alignments                  0
+Co
+
+Converting results to TSV: foldseek/bin/foldseek convertalis results_fs_only_full_fs_compare/foldseek_db/sequenceDB results_fs_only_full_fs_compare/foldseek_db/sequenceDB results_fs_only_full_fs_compare/foldseek_results/result results_fs_only_full_fs_compare/foldseek_results/all_vs_all_results.tsv
+convertalis results_fs_only_full_fs_compare/foldseek_db/sequenceDB results_fs_only_full_fs_compare/foldseek_db/sequenceDB results_fs_only_full_fs_compare/foldseek_results/result results_fs_only_full_fs_compare/foldseek_results/all_vs_all_results.tsv 
+
+MMseqs Version:         24020d257933c362dd1c22fd64cf478f89d5efc6
+Substitution matrix     aa:3di.out,nucl:3di.out
+Alignment format        0
+Format alignment output query,target,fident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits
+Gap open cost           aa:10,nucl:10
+Gap extension cost      aa:1,nucl:1
+Database output         false
+Preload mode            0
+Threads                 16
+Compressed              0
+Verbosity               3
+Exact TMscore           0
+
+[=================================================================] 5.87K 1s 603ms
+Time for merging to all_vs_all_results.tsv: 0h 0m 1s 843ms
+Time for processing: 0h 0m 5s 157ms
+
+Results saved to results_fs_only_full_fs_compare/foldseek_results/all_vs_all_results.tsv
+
+Done. All outputs in results_fs_only_full_fs_compare/

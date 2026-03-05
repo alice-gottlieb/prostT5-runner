@@ -1,0 +1,1 @@
+uv run batch_3di_search.py assemblies.txt --output-dir results2/

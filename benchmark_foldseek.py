@@ -95,6 +95,7 @@ def measure_genome(
     use_gpu: bool,
     skip_search: bool,
     work_dir: str,
+    prostt5_split_length: int = None,
 ) -> dict:
     """
     Run the foldseek pipeline on a single FASTA file and measure timing
@@ -116,6 +117,8 @@ def measure_genome(
     ]
     if use_gpu:
         cmd_create.extend(["--gpu", "1"])
+    if prostt5_split_length is not None:
+        cmd_create.extend(["-prostt5SplitLength", str(prostt5_split_length)])
 
     t0 = time.perf_counter()
     subprocess.run(cmd_create, capture_output=True, text=True, check=True)
@@ -201,6 +204,12 @@ def main():
         help="NCBI API key for higher download rate limits (optional)",
     )
     parser.add_argument(
+        "--split-lengths", nargs="+", type=int, default=[None],
+        help="ProstT5 split lengths to benchmark (-prostt5SplitLength). "
+             "Controls max sequence length before splitting into multiple runs. "
+             "Shorter values reduce peak VRAM usage.",
+    )
+    parser.add_argument(
         "--skip-search", action="store_true",
         help="Only benchmark 3Di generation (createdb), skip the search step",
     )
@@ -275,19 +284,29 @@ def main():
     # Sort by total residues (smallest first) for readable output
     sorted_accessions = sorted(fasta_paths.keys(), key=lambda a: genome_stats[a][1])
 
+    # Build list of (threads, split_length) combinations to sweep
+    configs = [
+        (t, sl)
+        for t in args.thread_counts
+        for sl in args.split_lengths
+    ]
+
     # Run benchmarks
     results = []
-    total_runs = len(sorted_accessions) * len(args.thread_counts) * args.reps
+    total_runs = len(sorted_accessions) * len(configs) * args.reps
     run_num = 0
 
     for acc in sorted_accessions:
         fasta = fasta_paths[acc]
         n_prot, n_res = genome_stats[acc]
 
-        for threads in args.thread_counts:
+        for threads, split_len in configs:
             for rep in range(1, args.reps + 1):
                 run_num += 1
-                label = f"[{run_num}/{total_runs}] {acc} threads={threads}"
+                parts = [f"threads={threads}"]
+                if split_len is not None:
+                    parts.append(f"splitLen={split_len}")
+                label = f"[{run_num}/{total_runs}] {acc} {' '.join(parts)}"
                 if args.reps > 1:
                     label += f" rep={rep}"
                 print(f"\n{label} ({n_prot:,} proteins, {n_res:,} residues)")
@@ -298,6 +317,7 @@ def main():
                         timing = measure_genome(
                             fasta, foldseek_bin, args.prostt5_weights,
                             threads, args.gpu, args.skip_search, work_dir,
+                            prostt5_split_length=split_len,
                         )
                     except subprocess.CalledProcessError as e:
                         print(f"  FAILED: {e.stderr[:300] if e.stderr else e}")
@@ -308,6 +328,7 @@ def main():
                     "num_proteins": n_prot,
                     "total_residues": n_res,
                     "threads": threads,
+                    "prostt5_split_length": split_len or "default",
                     "rep": rep,
                     **timing,
                 }
@@ -322,7 +343,7 @@ def main():
     if results:
         fieldnames = [
             "accession", "num_proteins", "total_residues",
-            "threads", "rep",
+            "threads", "prostt5_split_length", "rep",
             "time_createdb_s", "time_search_s", "time_total_s",
         ]
         with open(args.output, "w", newline="") as f:
@@ -332,13 +353,20 @@ def main():
         print(f"\nResults written to {args.output}")
 
         # Print summary table
-        print(f"\n{'='*80}")
-        print(f"{'Accession':<20} {'Proteins':>10} {'Residues':>12} {'Threads':>8} {'CreateDB':>10} {'Search':>10} {'Total':>10}")
-        print(f"{'-'*80}")
+        hdr = (
+            f"{'Accession':<20} {'Proteins':>10} {'Residues':>12} "
+            f"{'Threads':>8} {'SplitLen':>10} "
+            f"{'CreateDB':>10} {'Search':>10} {'Total':>10}"
+        )
+        print(f"\n{'=' * len(hdr)}")
+        print(hdr)
+        print(f"{'-' * len(hdr)}")
         for r in results:
+            sl_str = str(r['prostt5_split_length'])
             print(
                 f"{r['accession']:<20} {r['num_proteins']:>10,} {r['total_residues']:>12,} "
-                f"{r['threads']:>8} {r['time_createdb_s']:>9.1f}s {r['time_search_s']:>9.1f}s {r['time_total_s']:>9.1f}s"
+                f"{r['threads']:>8} {sl_str:>10} "
+                f"{r['time_createdb_s']:>9.1f}s {r['time_search_s']:>9.1f}s {r['time_total_s']:>9.1f}s"
             )
     else:
         print("\nNo results collected.")

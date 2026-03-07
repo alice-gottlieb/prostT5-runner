@@ -65,7 +65,7 @@ source ~/.bashrc
 # module load cuda/12.1
 
 # Run batch_3di_foldseek.py with --skip-foldseek (3Di generation only)
-uv run python batch_3di_foldseek.py "$CHUNK_FILE" \
+uv run python ~/prostT5-runner/batch_3di_foldseek.py "$CHUNK_FILE" \
     --output-dir "$TASK_OUTPUT" \
     --foldseek-path "$FOLDSEEK_BIN" \
     --prostt5-weights "$PROSTT5_WEIGHTS" \

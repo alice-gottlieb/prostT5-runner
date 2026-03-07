@@ -72,7 +72,7 @@ for ((i = 0; i < TOTAL; i += BATCH_SIZE)); do
     echo "--- Batch $BATCH_NUM: ${#BATCH[@]} accessions ($(date)) ---"
 
     # Step 1: Dehydrated download (metadata + manifest only, very fast)
-    datasets download genome accession $ACC_LIST \
+    ~/prostT5-runner/datasets download genome accession $ACC_LIST \
         --api-key "$API_KEY" \
         --include protein \
         --dehydrated \
@@ -88,7 +88,7 @@ for ((i = 0; i < TOTAL; i += BATCH_SIZE)); do
     rm -f "${BATCH_DIR}/dehydrated.zip"
 
     # Step 3: Rehydrate (fetch actual sequence files in parallel)
-    datasets rehydrate --directory "${BATCH_DIR}" --api-key "$API_KEY"
+    ~/prostT5-runner/datasets rehydrate --directory "${BATCH_DIR}" --api-key "$API_KEY"
 
     if [ $? -ne 0 ]; then
         echo "ERROR: Rehydration failed for batch $BATCH_NUM"

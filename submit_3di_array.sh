@@ -57,8 +57,12 @@ echo "=== Started: $(date) ==="
 TASK_OUTPUT="${OUTPUT_BASE}/task_${TASK_ID_PAD}"
 mkdir -p "$TASK_OUTPUT" logs
 
+# Source module system and user profile
+. /u/local/Modules/default/init/modules.sh
+source ~/.bashrc
+
 # Load CUDA module
-module load cuda/12.1
+# module load cuda/12.1
 
 # Run batch_3di_foldseek.py with --skip-foldseek (3Di generation only)
 uv run python batch_3di_foldseek.py "$CHUNK_FILE" \

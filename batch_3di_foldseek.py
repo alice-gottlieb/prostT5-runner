@@ -411,6 +411,11 @@ def main():
         help="Directory for all output files (default: batch_output)",
     )
     parser.add_argument(
+        "--fasta-dir",
+        default=None,
+        help="Directory containing pre-downloaded .faa files (skips NCBI download step)",
+    )
+    parser.add_argument(
         "--ncbi-api-key",
         default=None,
         help="NCBI API key for higher rate limits (optional)",
@@ -472,11 +477,23 @@ def main():
     # 1. Read accessions
     accessions = read_accessions(args.accession_file)
 
-    # 2. Download FASTAs
-    print("\n--- Downloading FASTAs ---")
-    downloaded = batch_download(accessions, str(fasta_dir), args.ncbi_api_key)
+    # 2. Download FASTAs (or use pre-downloaded ones)
+    if args.fasta_dir:
+        print(f"\n--- Using pre-downloaded FASTAs from {args.fasta_dir} ---")
+        fasta_dir = Path(args.fasta_dir)
+        downloaded = {}
+        for acc in accessions:
+            faa_path = fasta_dir / f"{acc}.faa"
+            if faa_path.exists():
+                downloaded[acc] = str(faa_path)
+            else:
+                print(f"  [WARN] {acc}: no .faa file found at {faa_path}")
+        print(f"Found {len(downloaded)}/{len(accessions)} pre-downloaded FASTAs")
+    else:
+        print("\n--- Downloading FASTAs ---")
+        downloaded = batch_download(accessions, str(fasta_dir), args.ncbi_api_key)
     if not downloaded:
-        print("No sequences downloaded. Exiting.")
+        print("No sequences found. Exiting.")
         return
 
     # 3. Parse

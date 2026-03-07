@@ -2,9 +2,9 @@
 #$ -cwd
 #$ -o logs/3di_array.$JOB_ID.$TASK_ID.out
 #$ -j y
-#$ -l gpu,A100,cuda=1,h_data=16G,h_rt=24:00:00
+#$ -l gpu,cuda=1,h_data=16G,h_rt=1:00:00,gpu_mem=8G
 #$ -pe shared 8
-#$ -t 1-12
+#$ -t 1-5
 #$ -M $USER@ucla.edu
 #$ -m bea
 #
@@ -32,11 +32,11 @@
 # ---------------------------------------------------------------------------
 
 # ---- Configuration (edit these) ----
-FOLDSEEK_BIN="$HOME/foldseek/bin/foldseek"
+FOLDSEEK_BIN="$HOME/prostT5-runner/foldseek/bin/foldseek"
 PROSTT5_WEIGHTS="$HOME/prostT5-runner/prostt5_weights/prostt5/prostt5-f16.gguf"
-THREADS=8
-OUTPUT_BASE="$HOME/prostT5-runner/results_3di"
-CHUNKS_DIR="$HOME/prostT5-runner/chunks"
+THREADS=1
+OUTPUT_BASE="$HOME/prostT5-runner/qsub_test_results_short_time_single_thread"
+CHUNKS_DIR="$HOME/prostT5-runner/qsub_test"
 # ------------------------------------
 
 # Pad task ID to match chunk filenames (chunk_01.txt, chunk_02.txt, ...)
@@ -61,7 +61,7 @@ mkdir -p "$TASK_OUTPUT" logs
 module load cuda/12.1
 
 # Run batch_3di_foldseek.py with --skip-foldseek (3Di generation only)
-python batch_3di_foldseek.py "$CHUNK_FILE" \
+uv run python batch_3di_foldseek.py "$CHUNK_FILE" \
     --output-dir "$TASK_OUTPUT" \
     --foldseek-path "$FOLDSEEK_BIN" \
     --prostt5-weights "$PROSTT5_WEIGHTS" \

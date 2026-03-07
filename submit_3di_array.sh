@@ -3,7 +3,7 @@
 #$ -o logs/3di_array.$JOB_ID.$TASK_ID.out
 #$ -j y
 #$ -l gpu,cuda=1,h_data=16G,h_rt=1:00:00,gpu_mem=8G
-#$ -pe shared 8
+##$ -pe shared 8
 #$ -t 1-5
 #$ -M $USER@ucla.edu
 #$ -m bea
@@ -76,4 +76,12 @@ uv run python ~/prostT5-runner/batch_3di_foldseek.py "$CHUNK_FILE" \
 EXIT_CODE=$?
 
 echo "=== Task $SGE_TASK_ID finished with exit code $EXIT_CODE at $(date) ==="
+
+# Compress output directory
+if [ $EXIT_CODE -eq 0 ]; then
+    tar -czf "${TASK_OUTPUT}.tar.gz" -C "$(dirname "$TASK_OUTPUT")" "$(basename "$TASK_OUTPUT")"
+    # rm -rf "$TASK_OUTPUT"
+    echo "=== Compressed output to ${TASK_OUTPUT}.tar.gz ==="
+fi
+
 exit $EXIT_CODE

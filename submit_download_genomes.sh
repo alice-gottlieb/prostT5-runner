@@ -2,9 +2,8 @@
 #$ -cwd
 #$ -o logs/download_genomes.$JOB_ID.$TASK_ID.out
 #$ -j y
-#$ -l h_data=8G,h_rt=4:00:00
-#$ -pe shared 2
-#$ -t 1-5
+#$ -l highp,h_data=8G,h_rt=1:30:00
+#$ -t 1-20
 #$ -M $USER@ucla.edu
 #$ -m bea
 #
@@ -29,7 +28,7 @@
 # ---------------------------------------------------------------------------
 
 # ---- Configuration (edit these) ----
-CHUNKS_DIR="$HOME/prostT5-runner/download_chunks"
+CHUNKS_DIR="$HOME/prostT5-runner/all_download_chunks"
 OUTPUT_BASE="$SCRATCH/ncbi_genomes"
 API_KEY_FILE="$HOME/prostT5-runner/ncbi_key.txt"
 BATCH_SIZE=50  # accessions per datasets call (avoids URL length limits)

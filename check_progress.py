@@ -2,6 +2,7 @@
 """Check completion progress of 3DI chunks against completed accessions."""
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,14 +18,22 @@ def load_accessions_from_file(filepath):
     return accessions
 
 
+def chunk_sort_key(filepath):
+    """Extract numeric part from chunk filename for natural sorting."""
+    import re
+    name = filepath.name if isinstance(filepath, Path) else filepath
+    numbers = re.findall(r'\d+', name)
+    return (int(numbers[-1]) if numbers else 0, name)
+
+
 def load_chunk_dir(chunk_dir):
-    """Load all accessions from chunk files in a directory, sorted by name."""
+    """Load all accessions from chunk files in a directory, sorted numerically."""
     accessions = {}
-    for chunk_file in sorted(Path(chunk_dir).iterdir()):
-        if chunk_file.is_file():
-            with open(chunk_file) as f:
-                accs = {line.strip() for line in f if line.strip()}
-            accessions[chunk_file.name] = accs
+    files = [f for f in Path(chunk_dir).iterdir() if f.is_file()]
+    for chunk_file in sorted(files, key=chunk_sort_key):
+        with open(chunk_file) as f:
+            accs = {line.strip() for line in f if line.strip()}
+        accessions[chunk_file.name] = accs
     return accessions
 
 
@@ -123,9 +132,18 @@ def print_chunk_report(label, chunk_dir, completed):
 
 
 def main():
-    completed_file = Path(__file__).parent / "all_accessions.txt"
+    script_dir = Path(__file__).parent
+    print("Running collect_accessions.py...")
+    result = subprocess.run(
+        ["uv", "run", "python", str(script_dir / "collect_accessions.py")],
+        cwd=script_dir,
+    )
+    if result.returncode != 0:
+        sys.exit("Error: collect_accessions.py failed")
+
+    completed_file = script_dir / "all_accessions.txt"
     if not completed_file.is_file():
-        sys.exit(f"Error: {completed_file} not found. Run collect_accessions.py first.")
+        sys.exit(f"Error: {completed_file} not found.")
 
     completed = load_accessions_from_file(completed_file)
 

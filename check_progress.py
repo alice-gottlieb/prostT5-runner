@@ -90,14 +90,25 @@ def summarize_chunks(chunks, completed):
     return lines
 
 
+def get_chunk_pcts(chunks, completed):
+    """Return list of per-chunk completion percentages."""
+    pcts = []
+    for name in chunks:
+        accs = chunks[name]
+        total = len(accs)
+        done = len(accs & completed)
+        pcts.append((done / total * 100) if total else 0)
+    return pcts
+
+
 def print_chunk_report(label, chunk_dir, completed):
-    """Print a progress report for a chunk directory."""
+    """Print a progress report for a chunk directory. Returns (label, pcts) or None."""
     if not Path(chunk_dir).is_dir():
         print(f"\n{'=' * 60}")
         print(f"  {label}: {chunk_dir}")
         print(f"  ERROR: directory does not exist")
         print(f"{'=' * 60}")
-        return
+        return None
 
     chunks = load_chunk_dir(chunk_dir)
     all_in_chunks = set()
@@ -130,6 +141,30 @@ def print_chunk_report(label, chunk_dir, completed):
     for line in lines:
         print(line)
 
+    return (label, get_chunk_pcts(chunks, completed))
+
+
+def plot_histograms(results, output_path):
+    """Plot one histogram per folder showing chunk completion distribution."""
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(len(results), 1, figsize=(10, 5 * len(results)))
+    if len(results) == 1:
+        axes = [axes]
+
+    bins = list(range(0, 110, 10))  # 0, 10, 20, ..., 100
+
+    for ax, (label, pcts) in zip(axes, results):
+        ax.hist(pcts, bins=bins, edgecolor="black", color="steelblue")
+        ax.set_title(f"{label}  ({len(pcts)} chunks)")
+        ax.set_xlabel("Chunk completion (%)")
+        ax.set_ylabel("Number of chunks")
+        ax.set_xticks(bins)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    print(f"\nHistogram saved to {output_path}")
+
 
 def main():
     script_dir = Path(__file__).parent
@@ -158,8 +193,14 @@ def main():
 
     print(f"\nCompleted accessions loaded: {len(completed)}")
 
+    results = []
     for label, path in chunk_dirs:
-        print_chunk_report(label, path, completed)
+        r = print_chunk_report(label, path, completed)
+        if r:
+            results.append(r)
+
+    if results:
+        plot_histograms(results, script_dir / "chunk_progress_histograms.png")
 
     print()
 

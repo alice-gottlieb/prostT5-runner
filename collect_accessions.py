@@ -28,7 +28,7 @@ def main():
         for metadata_file in base_dir.glob(pattern):
             with open(metadata_file, "r") as f:
                 data = json.load(f)
-            all_accessions.extend(data.get("assemblies_downloaded", []))
+            all_accessions.extend([(d, str(str(metadata_file.parent).split("/")[-2:])) for d in data.get("assemblies_downloaded", [])])
 
     counts = Counter(all_accessions)
     unique = sorted(counts)
@@ -36,11 +36,11 @@ def main():
 
     with open("all_accessions.txt", "w") as f:
         for acc in unique:
-            f.write(acc + "\n")
+            f.write(acc[0] + " " + acc[1] + "\n")
 
     with open("duplicate_accessions.txt", "w") as f:
         for acc in duplicates:
-            f.write(f"{acc}\t{counts[acc]}\n")
+            f.write(f"{acc[0]}\t{counts[acc]}\n")
 
     print(f"Collected {len(unique)} unique accessions into all_accessions.txt")
     print(f"Found {len(duplicates)} duplicate accessions in duplicate_accessions.txt")

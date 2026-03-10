@@ -30,17 +30,22 @@ def main():
                 data = json.load(f)
             all_accessions.extend([(d, str(str(metadata_file.parent).split("/")[-2:])) for d in data.get("assemblies_downloaded", [])])
 
-    counts = Counter(all_accessions)
+    counts = Counter(acc for acc, _ in all_accessions)
     unique = sorted(counts)
     duplicates = sorted(acc for acc, count in counts.items() if count > 1)
 
+    # Build a lookup from accession to its source info
+    acc_to_source = {}
+    for acc, source in all_accessions:
+        acc_to_source.setdefault(acc, []).append(source)
+
     with open("all_accessions.txt", "w") as f:
         for acc in unique:
-            f.write(acc[0] + " " + acc[1] + "\n")
+            f.write(acc + " " + acc_to_source[acc][0] + "\n")
 
     with open("duplicate_accessions.txt", "w") as f:
         for acc in duplicates:
-            f.write(f"{acc[0]}\t{counts[acc]}\n")
+            f.write(f"{acc}\t{counts[acc]}\n")
 
     print(f"Collected {len(unique)} unique accessions into all_accessions.txt")
     print(f"Found {len(duplicates)} duplicate accessions in duplicate_accessions.txt")

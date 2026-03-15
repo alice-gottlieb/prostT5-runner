@@ -1,35 +1,47 @@
 #!/usr/bin/env python3
-"""Remove completed accessions (from all_3di_chunks_400_split) from new_chunks_20."""
+"""Remove completed accessions (found in metadata.json files) from new_chunks_20 chunk files."""
 
+import argparse
+import json
+import os
 import sys
 from pathlib import Path
 
 
-def load_accessions_from_chunks(chunk_dir):
-    """Load all accessions from chunk files in a directory."""
-    accessions = set()
-    for chunk_file in chunk_dir.iterdir():
-        if chunk_file.is_file():
-            with open(chunk_file) as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        accessions.add(line)
-    return accessions
+def load_completed_accessions(base_dir):
+    """Load all accessions from assemblies_downloaded in task_*/metadata.json files."""
+    completed = set()
+    for pattern in [
+        "task_*/metadata.json",
+        "*/task_*/metadata.json",
+        "*/*/task_*/metadata.json",
+    ]:
+        for metadata_file in base_dir.glob(pattern):
+            with open(metadata_file) as f:
+                data = json.load(f)
+            completed.update(data.get("assemblies_downloaded", []))
+    return completed
 
 
 def main():
-    completed_dir = Path("/u/home/a/aliceg/prostT5-runner/all_3di_chunks_400_split")
-    if not completed_dir.is_dir():
-        sys.exit(f"Error: {completed_dir} does not exist")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true", help="Print what would be removed without modifying files")
+    args = parser.parse_args()
+
+    scratch = os.environ.get("SCRATCH")
+    if not scratch:
+        sys.exit("Error: $SCRATCH environment variable is not set")
+
+    base_dir = Path(scratch) / "all_3dis"
+    if not base_dir.is_dir():
+        sys.exit(f"Error: {base_dir} does not exist")
+
+    completed = load_completed_accessions(base_dir)
+    print(f"Loaded {len(completed)} completed accessions from metadata.json files")
 
     target_dir = Path("/u/scratch/a/aliceg/new_chunks_20")
     if not target_dir.is_dir():
         sys.exit(f"Error: {target_dir} does not exist")
-
-    # Load all accessions from the completed chunks directory
-    completed = load_accessions_from_chunks(completed_dir)
-    print(f"Loaded {len(completed)} accessions from {completed_dir}")
 
     total_removed = 0
     files_modified = 0
@@ -45,13 +57,17 @@ def main():
         removed = len(lines) - len(filtered)
 
         if removed > 0:
-            # with open(chunk_file, "w") as f:
-            #     f.writelines(filtered)
+            if not args.dry_run:
+                with open(chunk_file, "w") as f:
+                    f.writelines(filtered)
             total_removed += removed
             files_modified += 1
-            print(f"  {chunk_file.name}: removed {removed} accessions")
+            print(f"  {chunk_file.name}: {'would remove' if args.dry_run else 'removed'} {removed} accessions")
 
-    print(f"\nDone. Removed {total_removed} lines from {files_modified} chunk files.")
+    if args.dry_run:
+        print(f"\nDry run. Would remove {total_removed} lines from {files_modified} chunk files.")
+    else:
+        print(f"\nDone. Removed {total_removed} lines from {files_modified} chunk files.")
 
 
 if __name__ == "__main__":

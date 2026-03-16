@@ -58,11 +58,15 @@ def main():
 
         if removed > 0:
             if not args.dry_run:
-                with open(chunk_file, "w") as f:
-                    f.writelines(filtered)
+                if filtered:
+                    with open(chunk_file, "w") as f:
+                        f.writelines(filtered)
+                else:
+                    chunk_file.unlink()
             total_removed += removed
             files_modified += 1
-            print(f"  {chunk_file.name}: {'would remove' if args.dry_run else 'removed'} {removed} accessions")
+            action = "would remove" if args.dry_run else ("deleted" if not filtered else "removed")
+            print(f"  {chunk_file.name}: {action} {removed} accessions{' (file deleted)' if not args.dry_run and not filtered else ''}")
 
     if args.dry_run:
         print(f"\nDry run. Would remove {total_removed} lines from {files_modified} chunk files.")

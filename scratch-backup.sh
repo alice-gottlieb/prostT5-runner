@@ -1,0 +1,1 @@
+rclone copy -P --transfers 8 --checkers 8 --log-file /u/scratch/a/aliceg/logs/backup-logs/scratch-$(date +"%Y-%m-%d_%H-%M-%S").log --log-level INFO /u/scratch/a/aliceg/ ucla-box:research/pellegrini/3di-backups/scratch-$(date +"%Y-%m-%d_%H-%M-%S")

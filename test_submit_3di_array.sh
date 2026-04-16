@@ -8,7 +8,7 @@
 ##$ -l gpu,H200,cuda=1,h_data=32G,h_rt=5:00:00,gpu_mem=10G,h_vmem=32G
 ## ^ Success
 
-#$ -l gpu,RTX2080Ti,cuda=1,h_data=32G,h_rt=0:30:00,gpu_mem=4G,h_vmem=16G
+#$ -l gpu,RTX2080Ti,h_data=32G,h_rt=0:30:00,gpu_mem=4G,h_vmem=16G
 
 ##$ -pe node 2
 ##$ -l gpu,gpu_model="RTX2080Ti|H200|A100|H100|L40S|A6000",cuda=1,h_data=32G,h_rt=6:00:00,gpu_mem=7G
@@ -67,7 +67,7 @@ FASTA_DIR="$SCRATCH/ncbi_genomes"
 # export CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits | sort -t',' -k2 -nr | head -1 | cut -d',' -f1)
 echo "=== CUDA Visible Devices: $CUDA_VISIBLE_DEVICES ==="
 
-export CUDA_LAUNCH_BLOCKING=1
+# export CUDA_LAUNCH_BLOCKING=1
 
 NUM_ACCESSIONS=$(grep -cv '^\s*$\|^#' "$CHUNK_FILE")
 echo "=== Task $SGE_TASK_ID: Processing $NUM_ACCESSIONS accessions from $CHUNK_FILE ==="
@@ -77,9 +77,9 @@ echo "=== Started: $(date +"%Y-%m-%d %H:%M:%S") ==="
 # Create output directory for this task
 # TASK_OUTPUT="${OUTPUT_BASE}/task_${TASK_ID_PAD}"
 TASK_OUTPUT = "$OUTPUT_BASE/rtxTest1_output"
-mkdir -p "$TASK_OUTPUT" logs
+mkdir -p "$TASK_OUTPUT/logs"
 
-cp "$(realpath "$0")" "$OUTPUT_BASE/$(basename "$0")"
+# cp "$(realpath "$0")" "$OUTPUT_BASE/$(basename "$0")"
 
 # Disable core dumps
 ulimit -c 0
@@ -101,7 +101,8 @@ uv run python -u ~/prostT5-runner/batch_3di_foldseek.py "$CHUNK_FILE" \
     --gpu \
     --threads $THREADS \
     --fasta-dir $FASTA_DIR \
-    --skip-foldseek 
+    --skip-foldseek \
+    --foldseek-args -v 3
     # --ncbi-api-key $(cat ~/prostT5-runner/ncbi_key.txt)
 
 EXIT_CODE=$?

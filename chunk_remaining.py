@@ -32,14 +32,19 @@ def get_available_accessions(genomes_dir):
 def get_completed_accessions(results_dir):
     """Get accessions already processed from metadata.json in task_* dirs."""
     completed = set()
-    for meta_path in glob.glob(os.path.join(results_dir, "task_*/metadata.json")):
-        try:
-            with open(meta_path) as f:
-                meta = json.load(f)
-            for acc in meta.get("assemblies_downloaded", []):
-                completed.add(acc)
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"  [WARN] Skipping {meta_path}: {e}")
+    for pattern in [
+        "task_*/metadata.json",
+        "*/task_*/metadata.json",
+        "*/*/task_*/metadata.json",
+    ]:
+        for meta_path in glob.glob(os.path.join(results_dir, pattern)):
+            try:
+                with open(meta_path, "r") as f:
+                    meta = json.load(f)
+                for acc in meta.get("assemblies_downloaded", []):
+                    completed.add(acc)
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"  [WARN] Skipping {meta_path}: {e}")
     return completed
 
 

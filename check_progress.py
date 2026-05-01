@@ -141,7 +141,7 @@ def print_chunk_report(label, chunk_dir, completed):
     for line in lines:
         print(line)
 
-    return (label, get_chunk_pcts(chunks, completed))
+    return (label, get_chunk_pcts(chunks, completed), all_in_chunks)
 
 
 def plot_histograms(results, output_path):
@@ -154,7 +154,7 @@ def plot_histograms(results, output_path):
 
     bins = list(range(0, 110, 10))  # 0, 10, 20, ..., 100
 
-    for ax, (label, pcts) in zip(axes, results):
+    for ax, (label, pcts, _) in zip(axes, results):
         ax.hist(pcts, bins=bins, edgecolor="black", color="steelblue")
         ax.set_title(f"{label}  ({len(pcts)} chunks)")
         ax.set_xlabel("Chunk completion (%)")
@@ -203,6 +203,14 @@ def main():
 
     if results:
         plot_histograms(results, script_dir / "chunk_progress_histograms.png")
+
+        all_chunked = set().union(*(accs for _, _, accs in results))
+        remaining = sorted(all_chunked - completed)
+        print(f"\n{'=' * 60}")
+        print(f"  Incomplete accessions across all chunk dirs: {len(remaining)}")
+        print(f"{'=' * 60}")
+        for acc in remaining:
+            print(acc)
 
     print()
 

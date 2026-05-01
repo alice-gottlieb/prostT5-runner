@@ -189,6 +189,8 @@ def main():
     chunk_dirs = [
         ("all_3di_chunks_400_split", os.path.expanduser("~/prostT5-runner/all_3di_chunks_400_split")),
         ("new_chunks_20", os.path.join(scratch, "new_chunks_20")),
+        ("final_chunk_20", os.path.join(scratch, "final_chunk_20")),
+        ("final9k_chunk20", os.path.join(scratch, "final9k_chunk20"))
     ]
 
     print(f"\nCompleted accessions loaded: {len(completed)}")

@@ -33,15 +33,18 @@ section() { printf "\n=== %s ===\n" "$1"; }
 
 # 1) Discover all DBs
 section "1) Discovering DBs"
-python -c "
+RUN_A="$RUN_A" RUN_B="$RUN_B" python - <<'EOF'
+import os
 from pathlib import Path
 from collect_3di_dbs import discover_completed_dirs, has_full_db
-for run in ['$RUN_A', '$RUN_B']:
+
+for run in [os.environ["RUN_A"], os.environ["RUN_B"]]:
     dirs = discover_completed_dirs(Path(run))
-    print(f'\n{run}: {len(dirs)} completed')
+    print(f"\n{run}: {len(dirs)} completed")
     for d in dirs:
-        print(f'  {\"OK         \" if has_full_db(d) else \"FASTA-only \"}{d}')
-"
+        tag = "OK         " if has_full_db(d) else "FASTA-only "
+        print(f"  {tag}{d}")
+EOF
 
 # 2) Snapshot originals, then run the merge
 section "2) Hashing originals + running merge"

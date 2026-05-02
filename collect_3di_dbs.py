@@ -134,7 +134,7 @@ def merge_dbs(db_dirs: list[Path], out_dir: Path, foldseek_bin: str, threads: in
              str(tmp), "--threads", str(threads)],
             "  main DB")
         run([foldseek_bin, "concatdbs", f"{merged}_h", f"{next_db}_h",
-             f"{tmp}_h", "--threads", str(threads), "--preserve-keys"],
+             f"{tmp}_h", "--threads", str(threads)],
             "  header DB")
         run([foldseek_bin, "concatdbs", f"{merged}_ss", f"{next_db}_ss",
              f"{tmp}_ss", "--threads", str(threads)],

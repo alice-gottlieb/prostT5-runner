@@ -18,7 +18,7 @@ import argparse
 import os
 from pathlib import Path
 
-from collect_3di_dbs import discover_completed_dirs, has_full_db, merge_dbs
+from collect_3di_dbs import discover_completed_dirs, has_full_db, merge_dbs, merge_metadata
 
 
 def collect_task_dbs(run_dir: Path) -> tuple[list[Path], list[Path]]:
@@ -63,6 +63,7 @@ def main():
 
     print(f"\nMerging {len(all_dbs)} task DBs into {args.output}")
     merge_dbs(all_dbs, args.output, args.foldseek_path, args.threads)
+    merge_metadata(all_dbs, args.output)
 
 
 if __name__ == "__main__":

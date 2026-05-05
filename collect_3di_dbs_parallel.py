@@ -45,10 +45,23 @@ FAILURE_LOG_HEADER = "timestamp\tlevel\tpair_index\tdb_a\tdb_b\tpropagated\terro
 # Pair-merge primitive
 # ---------------------------------------------------------------------------
 
+def _db_prefix_in(d: Path) -> str:
+    """Original task dirs hold a 'sequenceDB' family; intermediate merge
+    outputs hold a 'mergedDB' family. Pick whichever is present."""
+    if (d / "mergedDB").exists():
+        return "mergedDB"
+    if (d / DB_PREFIX).exists():
+        return DB_PREFIX
+    raise FileNotFoundError(
+        f"No '{DB_PREFIX}' or 'mergedDB' family found in {d}")
+
+
 def merge_pair(a_dir: Path, b_dir: Path, out_dir: Path,
                foldseek_bin: str, threads: int) -> Path:
-    """Merge two foldseek DBs (each rooted at sequenceDB inside a_dir/b_dir)
-    into out_dir/mergedDB*. Raises subprocess.CalledProcessError on failure.
+    """Merge two foldseek DBs into out_dir/mergedDB*. Each input directory
+    may hold either a 'sequenceDB' family (original task dirs) or a
+    'mergedDB' family (outputs of a previous pair-merge). Raises
+    subprocess.CalledProcessError on failure.
 
     No --preserve-keys (keys must be offset consistently across all three
     sub-DBs to keep main/_h/_ss aligned). No lndb here — the caller does
@@ -56,11 +69,14 @@ def merge_pair(a_dir: Path, b_dir: Path, out_dir: Path,
     out_dir.mkdir(parents=True, exist_ok=True)
     merged = out_dir / "mergedDB"
 
-    for src in a_dir.glob(f"{DB_PREFIX}*"):
-        dest = out_dir / src.name.replace(DB_PREFIX, "mergedDB", 1)
+    a_prefix = _db_prefix_in(a_dir)
+    b_prefix = _db_prefix_in(b_dir)
+
+    for src in a_dir.glob(f"{a_prefix}*"):
+        dest = out_dir / src.name.replace(a_prefix, "mergedDB", 1)
         shutil.copy2(src, dest)
 
-    next_db = b_dir / DB_PREFIX
+    next_db = b_dir / b_prefix
     tmp = out_dir / "_concat_tmp"
 
     cmds = [

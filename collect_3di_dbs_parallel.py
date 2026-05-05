@@ -118,12 +118,36 @@ def append_failure(log_path: Path, level: int, pair_index: int,
 # Tree reduction
 # ---------------------------------------------------------------------------
 
+def _threads_per_merge(total_threads: int, n_merges: int,
+                       min_per_merge: int) -> list[int]:
+    """Distribute total_threads across n_merges. Each merge gets at least
+    min_per_merge. If total_threads >= n_merges * min_per_merge, the spare
+    budget is spread across merges (some get one extra). Otherwise we cannot
+    fit all merges with the floor, so each gets exactly min_per_merge and
+    the pool will throttle concurrency."""
+    if n_merges == 0:
+        return []
+    base = max(min_per_merge, total_threads // n_merges)
+    if base * n_merges <= total_threads:
+        threads = [base] * n_merges
+        remainder = total_threads - base * n_merges
+        for i in range(remainder):
+            threads[i] += 1
+        return threads
+    return [min_per_merge] * n_merges
+
+
 def reduce_tree(leaves: list[Path], out_dir: Path, foldseek_bin: str,
-                num_workers: int, merge_threads: int,
+                total_threads: int, min_merge_threads: int,
                 failure_log: Path) -> Path:
     """Iteratively pair-merge `leaves` level-by-level until one DB remains.
-    Returns the directory containing the root mergedDB* family."""
-    pool = ThreadPoolExecutor(max_workers=num_workers)
+    Returns the directory containing the root mergedDB* family.
+
+    Threads per merge are computed dynamically per level: if the level's
+    pair count <= total_threads, the budget is split across merges (so a
+    near-final level with few merges gets fat-thread allocations); if not,
+    each merge takes the floor and the pool throttles concurrency."""
+    pool = ThreadPoolExecutor(max_workers=max(1, total_threads))
     tmp_root = out_dir / "tmp_merge"
     do_not_delete: set[Path] = set()  # any input to a failed merge
     leaf_set = {p.resolve() for p in leaves}
@@ -149,9 +173,18 @@ def reduce_tree(leaves: list[Path], out_dir: Path, foldseek_bin: str,
                  for i in range(0, len(current) - 1, 2)]
         carry = current[-1] if len(current) % 2 == 1 else None
 
+        thread_alloc = _threads_per_merge(total_threads, len(pairs),
+                                          min_merge_threads)
+        if thread_alloc and len(set(thread_alloc)) == 1:
+            alloc_desc = f"{thread_alloc[0]} threads each"
+        elif thread_alloc:
+            alloc_desc = (f"{min(thread_alloc)}-{max(thread_alloc)} threads each "
+                          f"(sum={sum(thread_alloc)})")
+        else:
+            alloc_desc = "no merges"
         print(f"\n=== Level {level}: {len(pairs)} pair merges"
               f"{' + 1 carry' if carry else ''} "
-              f"({num_workers} workers, {merge_threads} threads each) ===")
+              f"(budget={total_threads}, {alloc_desc}) ===")
 
         level_root = tmp_root / f"level_{level}"
         level_root.mkdir(parents=True, exist_ok=True)
@@ -160,7 +193,7 @@ def reduce_tree(leaves: list[Path], out_dir: Path, foldseek_bin: str,
         for j, (a, b) in enumerate(pairs):
             merge_out = level_root / f"merge_{j}"
             futures.append(pool.submit(
-                merge_pair, a, b, merge_out, foldseek_bin, merge_threads))
+                merge_pair, a, b, merge_out, foldseek_bin, thread_alloc[j]))
 
         next_level: list[Path] = []
         for j, ((a, b), fut) in enumerate(zip(pairs, futures)):
@@ -253,7 +286,10 @@ def main():
                    help="Total CPU budget across all concurrent merges "
                         "(default: os.cpu_count())")
     p.add_argument("--merge-db-threads", type=int, default=1,
-                   help="Threads per individual pair-merge (default: 1)")
+                   help="Minimum threads per individual pair-merge "
+                        "(default: 1). When fewer merges than --total-threads "
+                        "remain at a level, the spare budget is divided "
+                        "across them so each gets more than this floor.")
     p.add_argument("--failed-merges-log", default=None,
                    help="Path for the TSV failure log "
                         "(default: <output_dir>/failed_merges.txt)")
@@ -293,10 +329,9 @@ def main():
         raise SystemExit(
             "\nNo directories with complete sequenceDB files found; nothing to merge.")
 
-    num_workers = max(1, args.total_threads // args.merge_db_threads)
     print(f"\nMerging {len(mergeable)} sequenceDBs into {out_dir} "
-          f"({num_workers} workers x {args.merge_db_threads} threads each, "
-          f"total budget {args.total_threads})")
+          f"(total budget {args.total_threads}, "
+          f"min {args.merge_db_threads} threads/merge)")
     print(f"Failure log: {failure_log}")
 
     if len(mergeable) == 1:
@@ -305,7 +340,8 @@ def main():
         finalize_root(out_dir, out_dir, foldseek_bin)
     else:
         root = reduce_tree(mergeable, out_dir, foldseek_bin,
-                           num_workers, args.merge_db_threads, failure_log)
+                           args.total_threads, args.merge_db_threads,
+                           failure_log)
         finalize_root(root, out_dir, foldseek_bin)
         # Best-effort cleanup of the empty tmp_merge tree.
         tmp_root = out_dir / "tmp_merge"

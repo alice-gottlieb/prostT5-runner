@@ -21,6 +21,7 @@ Example
 
 import argparse
 import datetime
+import logging
 import os
 import shutil
 import subprocess
@@ -39,6 +40,34 @@ from collect_3di_dbs import (
 
 
 FAILURE_LOG_HEADER = "timestamp\tlevel\tpair_index\tdb_a\tdb_b\tpropagated\terror\n"
+
+logger = logging.getLogger("collect_3di_parallel")
+
+
+def setup_logging(log_file: Path | None) -> None:
+    """Configure the module logger with a stream handler (stderr) and an
+    optional file handler. The logging module's handlers are thread-safe
+    (each emit() acquires an internal RLock), so worker threads can call
+    logger.info(...) concurrently without garbled output."""
+    logger.setLevel(logging.DEBUG)
+    logger.handlers.clear()
+    fmt = logging.Formatter(
+        "%(asctime)s [%(threadName)s] %(levelname)-7s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+
+    stream_h = logging.StreamHandler(sys.stderr)
+    stream_h.setFormatter(fmt)
+    stream_h.setLevel(logging.INFO)
+    logger.addHandler(stream_h)
+
+    if log_file is not None:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_h = logging.FileHandler(log_file, mode="a")
+        file_h.setFormatter(fmt)
+        file_h.setLevel(logging.DEBUG)
+        logger.addHandler(file_h)
+        logger.info("Logging to %s", log_file)
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +193,7 @@ def reduce_tree(leaves: list[Path], out_dir: Path, foldseek_bin: str,
         try:
             shutil.rmtree(p)
         except OSError as e:
-            print(f"  WARN: could not remove {p}: {e}")
+            logger.warning("could not remove %s: %s", p, e)
 
     current = list(leaves)
     level = 1
@@ -182,9 +211,10 @@ def reduce_tree(leaves: list[Path], out_dir: Path, foldseek_bin: str,
                           f"(sum={sum(thread_alloc)})")
         else:
             alloc_desc = "no merges"
-        print(f"\n=== Level {level}: {len(pairs)} pair merges"
-              f"{' + 1 carry' if carry else ''} "
-              f"(budget={total_threads}, {alloc_desc}) ===")
+        logger.info("=== Level %d: %d pair merges%s (budget=%d, %s) ===",
+                    level, len(pairs),
+                    " + 1 carry" if carry else "",
+                    total_threads, alloc_desc)
 
         level_root = tmp_root / f"level_{level}"
         level_root.mkdir(parents=True, exist_ok=True)
@@ -203,7 +233,8 @@ def reduce_tree(leaves: list[Path], out_dir: Path, foldseek_bin: str,
                 # Inputs successfully consumed — drop them if they were temps.
                 safe_cleanup(a)
                 safe_cleanup(b)
-                print(f"  [L{level} #{j}] OK  {a.name} + {b.name} -> {result_dir}")
+                logger.info("[L%d #%d] OK  %s + %s -> %s",
+                            level, j, a.name, b.name, result_dir)
             except subprocess.CalledProcessError as e:
                 err = (e.stderr or "").strip() or repr(e)
                 propagated = a
@@ -211,9 +242,8 @@ def reduce_tree(leaves: list[Path], out_dir: Path, foldseek_bin: str,
                 do_not_delete.add(b.resolve())
                 append_failure(failure_log, level, j, a, b, propagated, err)
                 next_level.append(propagated)
-                print(f"  [L{level} #{j}] FAIL {a.name} + {b.name}: "
-                      f"propagating {a.name}; logged to {failure_log}",
-                      file=sys.stderr)
+                logger.error("[L%d #%d] FAIL %s + %s: propagating %s; logged to %s",
+                             level, j, a.name, b.name, a.name, failure_log)
 
         if carry is not None:
             next_level.append(carry)
@@ -263,7 +293,7 @@ def finalize_root(root_dir: Path, out_dir: Path, foldseek_bin: str) -> Path:
     index_file = out_dir / "mergedDB.index"
     if index_file.exists():
         n = sum(1 for _ in open(index_file))
-        print(f"\nMerged DB contains {n} sequences -> {merged}")
+        logger.info("Merged DB contains %d sequences -> %s", n, merged)
 
     return merged
 
@@ -293,6 +323,10 @@ def main():
     p.add_argument("--failed-merges-log", default=None,
                    help="Path for the TSV failure log "
                         "(default: <output_dir>/failed_merges.txt)")
+    p.add_argument("--log-file", default=None,
+                   help="Path for the run log "
+                        "(default: <output_dir>/run.log). "
+                        "Pass an empty string to disable file logging.")
     p.add_argument("-f", "--foldseek-path", default="foldseek",
                    help="foldseek binary (default: foldseek on PATH)")
     args = p.parse_args()
@@ -309,6 +343,14 @@ def main():
     failure_log = (Path(args.failed_merges_log) if args.failed_merges_log
                    else out_dir / "failed_merges.txt")
 
+    if args.log_file is None:
+        log_file = out_dir / "run.log"
+    elif args.log_file == "":
+        log_file = None
+    else:
+        log_file = Path(args.log_file)
+    setup_logging(log_file)
+
     completed = discover_completed_dirs(
         base)
     if not completed:
@@ -320,22 +362,21 @@ def main():
         (mergeable if has_full_db(d) else fasta_only).append(d)
 
     if fasta_only:
-        print(f"\nWARNING: {len(fasta_only)} directories have only "
-              f"{COMPLETION_MARKER} but no sibling {DB_PREFIX}* files. Skipping.")
+        logger.warning("%d directories have only %s but no sibling %s* files. Skipping.",
+                       len(fasta_only), COMPLETION_MARKER, DB_PREFIX)
         for d in fasta_only:
-            print(f"  - {d}")
+            logger.warning("  - %s", d)
 
     if not mergeable:
         raise SystemExit(
-            "\nNo directories with complete sequenceDB files found; nothing to merge.")
+            "No directories with complete sequenceDB files found; nothing to merge.")
 
-    print(f"\nMerging {len(mergeable)} sequenceDBs into {out_dir} "
-          f"(total budget {args.total_threads}, "
-          f"min {args.merge_db_threads} threads/merge)")
-    print(f"Failure log: {failure_log}")
+    logger.info("Merging %d sequenceDBs into %s (total budget %d, min %d threads/merge)",
+                len(mergeable), out_dir, args.total_threads, args.merge_db_threads)
+    logger.info("Failure log: %s", failure_log)
 
     if len(mergeable) == 1:
-        print("\nOnly 1 DB found — copying instead of merging.")
+        logger.info("Only 1 DB found — copying instead of merging.")
         copy_db_family(mergeable[0], DB_PREFIX, out_dir, "mergedDB")
         finalize_root(out_dir, out_dir, foldseek_bin)
     else:
@@ -349,8 +390,9 @@ def main():
             try:
                 shutil.rmtree(tmp_root)
             except OSError as e:
-                print(f"  WARN: could not remove {tmp_root}: {e} "
-                      f"(probably contains leftover failed-merge artifacts)")
+                logger.warning("could not remove %s: %s "
+                               "(probably contains leftover failed-merge artifacts)",
+                               tmp_root, e)
 
     merge_metadata(mergeable, out_dir)
 

@@ -30,13 +30,54 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from collect_3di_dbs import (
-    COMPLETION_MARKER,
     DB_PREFIX,
     DB_SUFFIXES,
-    discover_completed_dirs,
-    has_full_db,
     merge_metadata,
 )
+
+
+# ---------------------------------------------------------------------------
+# Discovery (prefix-agnostic — picks up sequenceDB* AND mergedDB* families)
+# ---------------------------------------------------------------------------
+
+KNOWN_DB_PREFIXES = (DB_PREFIX, "mergedDB")
+
+
+def has_full_db_any_prefix(d: Path) -> str | None:
+    """Return the prefix ('sequenceDB' or 'mergedDB') of a complete foldseek
+    DB family in `d`, or None if no complete family is present."""
+    for prefix in KNOWN_DB_PREFIXES:
+        if all((d / f"{prefix}{s}").exists() for s in DB_SUFFIXES):
+            return prefix
+    return None
+
+
+def discover_db_dirs(base: Path, output_file: Path | None = None) -> list[Path]:
+    """Recursively find every directory under `base` that holds a complete
+    foldseek DB family of either prefix. Catches both per-task outputs
+    (`sequenceDB*`, with their `all_sequences_3di.fasta` marker) and
+    already-merged outputs (`mergedDB*`)."""
+    base = Path(base).resolve()
+    if not base.is_dir():
+        raise SystemExit(f"discover_db_dirs: not a directory: {base}")
+
+    candidates: set[Path] = set()
+    for prefix in KNOWN_DB_PREFIXES:
+        for idx in base.rglob(f"{prefix}.index"):
+            candidates.add(idx.parent)
+
+    dirs = sorted(d for d in candidates if has_full_db_any_prefix(d))
+    print(f"Scanned {base}: {len(dirs)} directories with a complete "
+          f"foldseek DB family ({'/'.join(KNOWN_DB_PREFIXES)})")
+
+    if output_file is not None:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_file, "w") as f:
+            for d in dirs:
+                f.write(f"{d}\n")
+        print(f"Wrote {len(dirs)} discovered DB paths to {output_file}")
+
+    return dirs
 
 
 FAILURE_LOG_HEADER = "timestamp\tlevel\tpair_index\tdb_a\tdb_b\tpropagated\terror\n"
@@ -351,25 +392,11 @@ def main():
         log_file = Path(args.log_file)
     setup_logging(log_file)
 
-    completed = discover_completed_dirs(
-        base)
-    if not completed:
-        raise SystemExit(
-            f"No completed 3Di outputs (no '{COMPLETION_MARKER}') under {base}")
-
-    mergeable, fasta_only = [], []
-    for d in completed:
-        (mergeable if has_full_db(d) else fasta_only).append(d)
-
-    if fasta_only:
-        logger.warning("%d directories have only %s but no sibling %s* files. Skipping.",
-                       len(fasta_only), COMPLETION_MARKER, DB_PREFIX)
-        for d in fasta_only:
-            logger.warning("  - %s", d)
-
+    mergeable = discover_db_dirs(base, output_file=out_dir / "discovered_dbs.txt")
     if not mergeable:
         raise SystemExit(
-            "No directories with complete sequenceDB files found; nothing to merge.")
+            f"No directories with a complete foldseek DB family "
+            f"({'/'.join(KNOWN_DB_PREFIXES)}) under {base}")
 
     logger.info("Merging %d sequenceDBs into %s (total budget %d, min %d threads/merge)",
                 len(mergeable), out_dir, args.total_threads, args.merge_db_threads)
@@ -377,7 +404,8 @@ def main():
 
     if len(mergeable) == 1:
         logger.info("Only 1 DB found — copying instead of merging.")
-        copy_db_family(mergeable[0], DB_PREFIX, out_dir, "mergedDB")
+        src_prefix = has_full_db_any_prefix(mergeable[0]) or DB_PREFIX
+        copy_db_family(mergeable[0], src_prefix, out_dir, "mergedDB")
         finalize_root(out_dir, out_dir, foldseek_bin)
     else:
         root = reduce_tree(mergeable, out_dir, foldseek_bin,

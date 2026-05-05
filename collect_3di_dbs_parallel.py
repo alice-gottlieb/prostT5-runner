@@ -258,7 +258,7 @@ def main():
                    else out_dir / "failed_merges.txt")
 
     completed = discover_completed_dirs(
-        base, output_file=out_dir / "discovered_dbs.txt")
+        base)
     if not completed:
         raise SystemExit(
             f"No completed 3Di outputs (no '{COMPLETION_MARKER}') under {base}")

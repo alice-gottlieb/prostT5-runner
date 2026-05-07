@@ -43,41 +43,72 @@ from collect_3di_dbs import (
 KNOWN_DB_PREFIXES = (DB_PREFIX, "mergedDB")
 
 
+def _missing_db_files(d: Path, prefix: str) -> list[str]:
+    """Return the list of expected DB-family filenames that don't exist in d."""
+    return [f"{prefix}{s}" for s in DB_SUFFIXES
+            if not (d / f"{prefix}{s}").exists()]
+
+
 def has_full_db_any_prefix(d: Path) -> str | None:
     """Return the prefix ('sequenceDB' or 'mergedDB') of a complete foldseek
     DB family in `d`, or None if no complete family is present."""
     for prefix in KNOWN_DB_PREFIXES:
-        if all((d / f"{prefix}{s}").exists() for s in DB_SUFFIXES):
+        if not _missing_db_files(d, prefix):
             return prefix
     return None
 
 
 def discover_db_dirs(base: Path, output_file: Path | None = None) -> list[Path]:
     """Recursively find every directory under `base` that holds a complete
-    foldseek DB family of either prefix. Catches both per-task outputs
-    (`sequenceDB*`, with their `all_sequences_3di.fasta` marker) and
-    already-merged outputs (`mergedDB*`)."""
+    foldseek DB family of either prefix. Catches per-task outputs
+    (`sequenceDB*`) and already-merged outputs (`mergedDB*`).
+
+    Discovery uses os.walk (followlinks=True) so symlinked subdirectories
+    are also traversed. Any directory that has a `<prefix>.index` file but
+    is missing some other expected suffix is reported with the missing
+    filenames so the user can see why it was rejected."""
     base = Path(base).resolve()
     if not base.is_dir():
         raise SystemExit(f"discover_db_dirs: not a directory: {base}")
 
     candidates: set[Path] = set()
-    for prefix in KNOWN_DB_PREFIXES:
-        for idx in base.rglob(f"{prefix}.index"):
-            candidates.add(idx.parent)
+    for root, _, files in os.walk(base, followlinks=True):
+        for prefix in KNOWN_DB_PREFIXES:
+            if f"{prefix}.index" in files:
+                candidates.add(Path(root))
+                break  # one match per dir is enough
 
-    dirs = sorted(d for d in candidates if has_full_db_any_prefix(d))
-    print(f"Scanned {base}: {len(dirs)} directories with a complete "
-          f"foldseek DB family ({'/'.join(KNOWN_DB_PREFIXES)})")
+    accepted: list[Path] = []
+    rejected: list[tuple[Path, dict[str, list[str]]]] = []
+    for d in sorted(candidates):
+        prefix = has_full_db_any_prefix(d)
+        if prefix is not None:
+            accepted.append(d)
+        else:
+            missing_per_prefix = {
+                p: _missing_db_files(d, p)
+                for p in KNOWN_DB_PREFIXES
+                if (d / f"{p}.index").exists()
+            }
+            rejected.append((d, missing_per_prefix))
+
+    print(f"Scanned {base}: {len(candidates)} candidates "
+          f"({len(accepted)} complete, {len(rejected)} incomplete) "
+          f"[prefixes: {'/'.join(KNOWN_DB_PREFIXES)}]")
+    for d in accepted:
+        print(f"  OK         {d}")
+    for d, missing in rejected:
+        for p, miss in missing.items():
+            print(f"  INCOMPLETE {d} [{p}] missing: {', '.join(miss)}")
 
     if output_file is not None:
         output_file.parent.mkdir(parents=True, exist_ok=True)
         with open(output_file, "w") as f:
-            for d in dirs:
+            for d in accepted:
                 f.write(f"{d}\n")
-        print(f"Wrote {len(dirs)} discovered DB paths to {output_file}")
+        print(f"Wrote {len(accepted)} discovered DB paths to {output_file}")
 
-    return dirs
+    return accepted
 
 
 FAILURE_LOG_HEADER = "timestamp\tlevel\tpair_index\tdb_a\tdb_b\tpropagated\terror\n"

@@ -174,6 +174,9 @@ def merge_pair(a_dir: Path, b_dir: Path, out_dir: Path,
     b_prefix = _db_prefix_in(b_dir)
 
     for src in a_dir.glob(f"{a_prefix}*"):
+        if not src.exists():  # skip dangling symlinks (e.g. broken _ss_h)
+            logger.warning("skipping dangling symlink during seed copy: %s", src)
+            continue
         dest = out_dir / src.name.replace(a_prefix, "mergedDB", 1)
         shutil.copy2(src, dest)
 

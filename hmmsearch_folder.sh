@@ -3,22 +3,33 @@
 # One per-domain table (.domtblout) is written per input file.
 #
 # Usage:
-#   ./run_hmmsearch_folder.sh <input_dir> <output_dir> <pfam_hmm> [cpus]
+#   ./hmmsearch_folder.sh <input_dir> <output_dir> <pfam_hmm> [cpus_per_job] [max_jobs]
 #
 # Example:
-#   ./run_hmmsearch_folder.sh proteins/ pfam_hits/ pfam_data/Pfam-A.hmm 8
+#   ./hmmsearch_folder.sh proteins/ pfam_hits/ pfam_data/Pfam-A.hmm 8 2
 
-set -euo pipefail
+# set -euo pipefail
 
-if [[ $# -lt 3 || $# -gt 4 ]]; then
-    echo "Usage: $0 <input_dir> <output_dir> <pfam_hmm> [cpus]" >&2
+if [[ $# -lt 3 || $# -gt 5 ]]; then
+    echo "Usage: $0 <input_dir> <output_dir> <pfam_hmm> [cpus_per_job] [max_jobs]" >&2
     exit 1
 fi
 
 input_dir=$1
 output_dir=$2
 pfam_hmm=$3
-cpus=${4:-4}
+cpus_per_job=${4:-4}
+max_jobs=${5:-1}
+
+if ! [[ "$cpus_per_job" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: cpus_per_job must be a positive integer: $cpus_per_job" >&2
+    exit 1
+fi
+
+if ! [[ "$max_jobs" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: max_jobs must be a positive integer: $max_jobs" >&2
+    exit 1
+fi
 
 if [[ ! -d "$input_dir" ]]; then
     echo "Error: input dir not found: $input_dir" >&2
@@ -48,25 +59,44 @@ if [[ ${#faa_files[@]} -eq 0 ]]; then
     exit 1
 fi
 
-echo "Found ${#faa_files[@]} .faa files. Output: $output_dir (cpus=$cpus)"
+echo "Found ${#faa_files[@]} .faa files. Output: $output_dir (cpus_per_job=$cpus_per_job, max_jobs=$max_jobs)"
 
+pids=()
 for faa in "${faa_files[@]}"; do
     base=$(basename "$faa" .faa)
     domtbl="$output_dir/$base.domtblout"
+    humanreadable="$output_dir/$base.humanreadable.out"
 
-    if [[ -s "$domtbl" ]]; then
-        echo "  skip (exists): $base.domtblout"
+    if [[ -s "$domtbl" && -s "$humanreadable" ]]; then
+        echo "  skip (exists): $base.domtblout and $base.humanreadable.out"
         continue
     fi
 
     echo "  hmmsearch: $base.faa -> $base.domtblout"
     hmmsearch \
         --cut_ga \
-        --cpu "$cpus" \
+        --cpu "$cpus_per_job" \
         --domtblout "$domtbl" \
-        -o "$output_dir/$base.humanreadable.out" \
+        -o "$humanreadable" \
         "$pfam_hmm" \
-        "$faa"
+        "$faa" &
+    pids+=("$!")
+
+    while [[ $(jobs -rp | wc -l) -ge "$max_jobs" ]]; do
+        sleep 1
+    done
 done
+
+status=0
+for pid in "${pids[@]}"; do
+    if ! wait "$pid"; then
+        status=1
+    fi
+done
+
+if [[ "$status" -ne 0 ]]; then
+    echo "Error: one or more hmmsearch jobs failed" >&2
+    exit "$status"
+fi
 
 echo "Done. Tables in $output_dir/"

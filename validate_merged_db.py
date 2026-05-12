@@ -39,8 +39,16 @@ def load_faa_dir(faa_dir: Path) -> dict[str, int]:
 
 
 def extract_3di(db_dir: Path, foldseek_bin: str) -> dict[str, int]:
-    """Run foldseek convert2fasta on the merged 3Di sub-DB and return
+    """Load the merged 3Di FASTA, generating it from the sub-DB if needed.
     {protein_id: 3di_length}."""
+    precomputed_fasta = db_dir / "all_sequences_3di.fasta"
+    if precomputed_fasta.exists():
+        print(f"  Using existing 3Di FASTA: {precomputed_fasta}")
+        return {
+            record.id: len(record.seq)
+            for record in SeqIO.parse(precomputed_fasta, "fasta")
+        }
+
     ss_db = db_dir / "mergedDB_ss"
     if not ss_db.exists():
         sys.exit(f"3Di sub-DB not found: {ss_db}")

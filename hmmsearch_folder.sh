@@ -1,14 +1,14 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Run hmmsearch with Pfam-A.hmm against every .faa file in an input folder.
 # One per-domain table (.domtblout) is written per input file.
 #
 # Usage:
-#   ./run_hmmsearch_folder.sh <input_dir> <output_dir> <pfam_hmm> [cpus]
+#   ./hmmsearch_folder.sh <input_dir> <output_dir> <pfam_hmm> [cpus]
 #
 # Example:
-#   ./run_hmmsearch_folder.sh proteins/ pfam_hits/ pfam_data/Pfam-A.hmm 8
+#   ./hmmsearch_folder.sh proteins/ pfam_hits/ pfam_data/Pfam-A.hmm 8
 
-set -euo pipefail
+# set -euo pipefail
 
 if [[ $# -lt 3 || $# -gt 4 ]]; then
     echo "Usage: $0 <input_dir> <output_dir> <pfam_hmm> [cpus]" >&2
@@ -34,7 +34,7 @@ fi
 for ext in h3f h3i h3m h3p; do
     if [[ ! -f "$pfam_hmm.$ext" ]]; then
         echo "Missing $pfam_hmm.$ext - running hmmpress once..."
-        hmmpress "$pfam_hmm"
+        ~/bin/hmmer/bin/hmmpress "$pfam_hmm"
         break
     fi
 done
@@ -60,7 +60,7 @@ for faa in "${faa_files[@]}"; do
     fi
 
     echo "  hmmsearch: $base.faa -> $base.domtblout"
-    hmmsearch \
+    ~/bin/hmmer/bin/hmmsearch \
         --cut_ga \
         --cpu "$cpus" \
         --domtblout "$domtbl" \

@@ -2,9 +2,9 @@
 #$ -cwd
 #$ -o /u/scratch/a/aliceg/logs/pfam/hmmer2-1_by_1.$JOB_ID.out
 #$ -j y
-#$ -l h_data=2G,h_rt=23:00:00,highp
+#$ -l h_data=2G,h_rt=2:00:00,highp
 #$ -pe shared 2
-#$ -t 1-1000:10
+#$ -t 1-50:10
 #$ -M $USER@ucla.edu
 #$ -m ea
 . /u/local/Modules/default/init/modules.sh
@@ -57,7 +57,7 @@ for LINE_NUM in $(seq "$START_LINE" "$END_LINE"); do
     fi
 
     echo "=== [line $LINE_NUM] hmmsearch_single.sh $FAA_FILE ==="
-    if ! "$HMMSEARCH_SINGLE" "$FAA_FILE" "$OUTPUT_DIR" "$PFAM_HMM" "$CPUS"; then
+    if ! ./"$HMMSEARCH_SINGLE" /u/scratch/a/aliceg/ncbi_genomes/"$FAA_FILE" "$OUTPUT_DIR" "$PFAM_HMM" "$CPUS"; then
         echo "WARN: hmmsearch failed for line $LINE_NUM: $FAA_FILE; continuing"
         continue
     fi

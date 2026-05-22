@@ -39,7 +39,7 @@ fi
 for ext in h3f h3i h3m h3p; do
     if [[ ! -f "$pfam_hmm.$ext" ]]; then
         echo "Missing $pfam_hmm.$ext - running hmmpress once..."
-        hmmpress "$pfam_hmm"
+        ~/bin/hmmer/bin/hmmpress "$pfam_hmm"
         break
     fi
 done
@@ -62,7 +62,7 @@ if [[ -s "$domtbl" && -s "$humanreadable" ]]; then
 fi
 
 echo "hmmsearch: $filename -> $base.domtblout (cpus=$cpus)"
-hmmsearch \
+~/bin/hmmer/bin/hmmsearch \
     --cut_ga \
     --cpu "$cpus" \
     --domtblout "$domtbl" \

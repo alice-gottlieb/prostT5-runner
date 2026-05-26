@@ -45,19 +45,33 @@ if ! command -v "$FOLDSEEK_BIN" >/dev/null 2>&1; then
 fi
 
 TARGET_DB=""
-if [[ -f "$FOLDSEEK_DB_DIR/sequenceDB.index" && -f "$FOLDSEEK_DB_DIR/sequenceDB_ss.index" ]]; then
-    TARGET_DB="$FOLDSEEK_DB_DIR/sequenceDB"
-elif [[ -f "$FOLDSEEK_DB_DIR/mergedDB.index" && -f "$FOLDSEEK_DB_DIR/mergedDB_ss.index" ]]; then
-    TARGET_DB="$FOLDSEEK_DB_DIR/mergedDB"
-else
-    echo "ERROR: expected sequenceDB/sequenceDB_ss or mergedDB/mergedDB_ss in $FOLDSEEK_DB_DIR" >&2
+for dbtype_file in "$FOLDSEEK_DB_DIR"/*.dbtype; do
+    [[ -f "$dbtype_file" ]] || continue
+
+    db_prefix=${dbtype_file%.dbtype}
+    db_name=$(basename "$db_prefix")
+
+    # Only consider the main DB prefix, not companion DBs like *_h or *_ss.
+    if [[ "$db_name" == *_h || "$db_name" == *_ss || "$db_name" == *_ss_h ]]; then
+        continue
+    fi
+
+    if [[ -f "$db_prefix.index" \
+        && -f "${db_prefix}_ss.index" \
+        && -f "${db_prefix}_h.index" \
+        && -f "${db_prefix}_ss_h.index" ]]; then
+        TARGET_DB="$db_prefix"
+        break
+    fi
+done
+
+if [[ -z "$TARGET_DB" ]]; then
+    echo "ERROR: could not infer Foldseek DB prefix from *.dbtype files in $FOLDSEEK_DB_DIR" >&2
+    echo "ERROR: expected files like <prefix>.dbtype, <prefix>.index, <prefix>_ss.index, <prefix>_h.index, and <prefix>_ss_h.index" >&2
     exit 1
 fi
 
-if [[ ! -f "${TARGET_DB}_h.index" || ! -f "${TARGET_DB}_ss_h.index" ]]; then
-    echo "ERROR: target header DBs not found for $TARGET_DB" >&2
-    exit 1
-fi
+echo "Detected Foldseek DB prefix: $(basename "$TARGET_DB")"
 
 mkdir -p "$OUTPUT_DIR"
 

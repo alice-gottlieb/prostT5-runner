@@ -45,13 +45,17 @@ if ! command -v "$FOLDSEEK_BIN" >/dev/null 2>&1; then
     exit 1
 fi
 
+db_file_exists() {
+    [[ -e "$1" || -L "$1" ]]
+}
+
 TARGET_DB=""
 # Infer the main Foldseek DB prefix from any DB files present. Some merged
 # directories have <prefix>.dbtype, while others only have companion dbtypes
 # like <prefix>_h.dbtype and <prefix>_ss_h.dbtype.
 CANDIDATE_PREFIXES=()
 for dbtype_file in "$FOLDSEEK_DB_DIR"/*.dbtype; do
-    [[ -f "$dbtype_file" ]] || continue
+    db_file_exists "$dbtype_file" || continue
 
     db_prefix=${dbtype_file%.dbtype}
     db_name=$(basename "$db_prefix")
@@ -64,7 +68,7 @@ done
 # Also inspect .index files so a missing main <prefix>.dbtype does not prevent
 # detection when the usable Foldseek DB files are otherwise present.
 for index_file in "$FOLDSEEK_DB_DIR"/*.index; do
-    [[ -f "$index_file" ]] || continue
+    db_file_exists "$index_file" || continue
 
     db_prefix=${index_file%.index}
     db_name=$(basename "$db_prefix")
@@ -75,10 +79,10 @@ for index_file in "$FOLDSEEK_DB_DIR"/*.index; do
 done
 
 for db_prefix in "${CANDIDATE_PREFIXES[@]}"; do
-    if [[ -f "$db_prefix.index" \
-        && -f "${db_prefix}_ss.index" \
-        && -f "${db_prefix}_h.index" \
-        && -f "${db_prefix}_ss_h.index" ]]; then
+    if db_file_exists "$db_prefix.index" \
+        && db_file_exists "${db_prefix}_ss.index" \
+        && db_file_exists "${db_prefix}_h.index" \
+        && db_file_exists "${db_prefix}_ss_h.index"; then
         TARGET_DB="$db_prefix"
         break
     fi
@@ -90,6 +94,10 @@ if [[ -z "$TARGET_DB" ]]; then
     echo "ERROR: prefix candidates are inferred from any *.dbtype or *.index files present" >&2
     echo "Found DB-ish files:" >&2
     find "$FOLDSEEK_DB_DIR" -maxdepth 1 \( -name "*.dbtype" -o -name "*.index" \) -print | sort >&2
+    echo "Tried prefixes:" >&2
+    for db_prefix in "${CANDIDATE_PREFIXES[@]}"; do
+        echo "  $db_prefix" >&2
+    done
     exit 1
 fi
 

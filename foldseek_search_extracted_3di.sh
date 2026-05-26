@@ -24,6 +24,7 @@ OUTPUT_DIR=$3
 THREADS=${4:-4}
 FOLDSEEK_BIN=${5:-foldseek}
 
+# Validate the few assumptions that would make the later Foldseek call cryptic.
 if ! [[ "$THREADS" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: threads must be a positive integer: $THREADS" >&2
     exit 1
@@ -45,17 +46,35 @@ if ! command -v "$FOLDSEEK_BIN" >/dev/null 2>&1; then
 fi
 
 TARGET_DB=""
+# Infer the main Foldseek DB prefix from any DB files present. Some merged
+# directories have <prefix>.dbtype, while others only have companion dbtypes
+# like <prefix>_h.dbtype and <prefix>_ss_h.dbtype.
+CANDIDATE_PREFIXES=()
 for dbtype_file in "$FOLDSEEK_DB_DIR"/*.dbtype; do
     [[ -f "$dbtype_file" ]] || continue
 
     db_prefix=${dbtype_file%.dbtype}
     db_name=$(basename "$db_prefix")
+    db_name=${db_name%_ss_h}
+    db_name=${db_name%_ss}
+    db_name=${db_name%_h}
+    CANDIDATE_PREFIXES+=("$FOLDSEEK_DB_DIR/$db_name")
+done
 
-    # Only consider the main DB prefix, not companion DBs like *_h or *_ss.
-    if [[ "$db_name" == *_h || "$db_name" == *_ss || "$db_name" == *_ss_h ]]; then
-        continue
-    fi
+# Also inspect .index files so a missing main <prefix>.dbtype does not prevent
+# detection when the usable Foldseek DB files are otherwise present.
+for index_file in "$FOLDSEEK_DB_DIR"/*.index; do
+    [[ -f "$index_file" ]] || continue
 
+    db_prefix=${index_file%.index}
+    db_name=$(basename "$db_prefix")
+    db_name=${db_name%_ss_h}
+    db_name=${db_name%_ss}
+    db_name=${db_name%_h}
+    CANDIDATE_PREFIXES+=("$FOLDSEEK_DB_DIR/$db_name")
+done
+
+for db_prefix in "${CANDIDATE_PREFIXES[@]}"; do
     if [[ -f "$db_prefix.index" \
         && -f "${db_prefix}_ss.index" \
         && -f "${db_prefix}_h.index" \
@@ -66,8 +85,11 @@ for dbtype_file in "$FOLDSEEK_DB_DIR"/*.dbtype; do
 done
 
 if [[ -z "$TARGET_DB" ]]; then
-    echo "ERROR: could not infer Foldseek DB prefix from *.dbtype files in $FOLDSEEK_DB_DIR" >&2
-    echo "ERROR: expected files like <prefix>.dbtype, <prefix>.index, <prefix>_ss.index, <prefix>_h.index, and <prefix>_ss_h.index" >&2
+    echo "ERROR: could not infer Foldseek DB prefix from DB files in $FOLDSEEK_DB_DIR" >&2
+    echo "ERROR: expected files like <prefix>.index, <prefix>_ss.index, <prefix>_h.index, and <prefix>_ss_h.index" >&2
+    echo "ERROR: prefix candidates are inferred from any *.dbtype or *.index files present" >&2
+    echo "Found DB-ish files:" >&2
+    find "$FOLDSEEK_DB_DIR" -maxdepth 1 \( -name "*.dbtype" -o -name "*.index" \) -print | sort >&2
     exit 1
 fi
 
@@ -88,6 +110,7 @@ TMP_DIR="$OUTPUT_DIR/tmp_search"
 rm -rf "$OUTPUT_DIR/query_db" "$TMP_DIR"
 mkdir -p "$OUTPUT_DIR/query_db"
 
+# Accept either one augmented domtblout file or a directory of them.
 if [[ -d "$INPUT_PATH" ]]; then
     mapfile -t DOMTBLOUT_FILES < <(find "$INPUT_PATH" -maxdepth 1 -type f -name "*.with_3di.domtblout" | sort)
 else
@@ -115,6 +138,7 @@ query_count=0
 seq_offset=0
 header_offset=0
 
+# Convert each non-empty extracted 3Di sequence into one Foldseek query record.
 for domtblout in "${DOMTBLOUT_FILES[@]}"; do
     echo "Reading extracted 3Di sequences from $domtblout"
 
@@ -129,6 +153,7 @@ for domtblout in "${DOMTBLOUT_FILES[@]}"; do
         header_len=$((${#header} + 1))
         seq_len=${#three_di_sequence}
 
+        # Foldseek DB files store raw sequences plus byte offsets in .index files.
         printf ">%s\n%s\n" "$safe_query_id" "$three_di_sequence" >> "$QUERY_FASTA"
         printf "%s" "$three_di_sequence" >> "$QUERY_DB"
         printf "%s" "$three_di_sequence" >> "${QUERY_DB}_ss"
@@ -148,6 +173,8 @@ for domtblout in "${DOMTBLOUT_FILES[@]}"; do
         seq_offset=$((seq_offset + seq_len))
         header_offset=$((header_offset + header_len))
     done < <(
+        # The 3Di sequence is appended after a tab; the original domtblout row is
+        # still space-aligned, so split that first field to recover HMMER columns.
         awk -F '\t' '
             !/^#/ && NF >= 2 && length($NF) > 0 {
                 split($1, f, /[[:space:]]+/)
@@ -171,6 +198,7 @@ printf '\014\000\000\000' > "${QUERY_DB}_ss_h.dbtype"
 
 FASTAS_DIR="$(dirname "$FOLDSEEK_DB_DIR")/fastas"
 echo -e "target_id\ttarget_genome\ttarget_species\ttarget_genome_species" > "$TARGET_METADATA_TSV"
+# Recover target genome/species labels from the original FAA files when present.
 if [[ -d "$FASTAS_DIR" ]]; then
     for faa in "$FASTAS_DIR"/*.faa; do
         [[ -f "$faa" ]] || continue
@@ -198,6 +226,7 @@ echo "  Metadata: $METADATA_TSV"
 echo "  Query DB: $QUERY_DB"
 echo "Searching against: $TARGET_DB"
 
+# Search all extracted 3Di domain queries against the detected Foldseek DB.
 "$FOLDSEEK_BIN" search \
     "$QUERY_DB" \
     "$TARGET_DB" \
@@ -212,6 +241,7 @@ echo "Searching against: $TARGET_DB"
     "$RESULT_TSV" \
     --threads "$THREADS"
 
+# Keep the raw full-format file, then add a final target_genome_species column.
 "$FOLDSEEK_BIN" convertalis \
     "$QUERY_DB" \
     "$TARGET_DB" \

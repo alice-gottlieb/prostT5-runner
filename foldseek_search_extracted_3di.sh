@@ -2,27 +2,30 @@
 # Search extracted Pfam-match 3Di sequences against a Foldseek 3Di database.
 #
 # Usage:
-#   ./foldseek_search_extracted_3di.sh <with_3di.domtblout|dir> <foldseek_db_dir> <output_dir> [threads] [foldseek_bin]
+#   ./foldseek_search_extracted_3di.sh <with_3di.domtblout|dir> <foldseek_db_dir> <output_dir> <target_faa_dir> [threads] [foldseek_bin]
 #
 # Example:
 #   ./foldseek_search_extracted_3di.sh \
 #       pfam_hits2-1by1 \
 #       results_fs_only_full_fs_compare/foldseek_db \
 #       extracted_3di_foldseek_hits \
-#       8
+#       results_fs_only_full_fs_compare/fastas \
+#       8 \
+#       foldseek
 
-set -u
+set -euo pipefail
 
-if [[ $# -lt 3 || $# -gt 5 ]]; then
-    echo "Usage: $0 <with_3di.domtblout|dir> <foldseek_db_dir> <output_dir> [threads] [foldseek_bin]" >&2
+if [[ $# -lt 4 || $# -gt 6 ]]; then
+    echo "Usage: $0 <with_3di.domtblout|dir> <foldseek_db_dir> <output_dir> <target_faa_dir> [threads] [foldseek_bin]" >&2
     exit 1
 fi
 
 INPUT_PATH=$1
 FOLDSEEK_DB_DIR=$2
 OUTPUT_DIR=$3
-THREADS=${4:-4}
-FOLDSEEK_BIN=${5:-foldseek}
+TARGET_FASTAS_DIR=$4
+THREADS=${5:-4}
+FOLDSEEK_BIN=${6:-foldseek}
 
 # Validate the few assumptions that would make the later Foldseek call cryptic.
 if ! [[ "$THREADS" =~ ^[1-9][0-9]*$ ]]; then
@@ -37,6 +40,11 @@ fi
 
 if [[ ! -d "$FOLDSEEK_DB_DIR" ]]; then
     echo "ERROR: Foldseek DB directory not found: $FOLDSEEK_DB_DIR" >&2
+    exit 1
+fi
+
+if [[ ! -d "$TARGET_FASTAS_DIR" ]]; then
+    echo "ERROR: target FAA directory not found: $TARGET_FASTAS_DIR" >&2
     exit 1
 fi
 
@@ -117,6 +125,7 @@ TMP_DIR="$OUTPUT_DIR/tmp_search"
 
 rm -rf "$OUTPUT_DIR/query_db" "$TMP_DIR"
 mkdir -p "$OUTPUT_DIR/query_db"
+rm -f "$RESULT_TSV" "$RESULT_FULL_TSV" "$RESULT_FULL_RAW_TSV" "$RESULT_FULL_TSV.tmp"
 
 # Accept either one augmented domtblout file or a directory of them.
 if [[ -d "$INPUT_PATH" ]]; then
@@ -204,10 +213,11 @@ printf '\000\000\000\000' > "${QUERY_DB}_ss.dbtype"
 printf '\014\000\000\000' > "${QUERY_DB}_h.dbtype"
 printf '\014\000\000\000' > "${QUERY_DB}_ss_h.dbtype"
 
-FASTAS_DIR="$(dirname "$FOLDSEEK_DB_DIR")/fastas"
+FASTAS_DIR="$TARGET_FASTAS_DIR"
 echo -e "target_id\ttarget_genome\ttarget_species\ttarget_genome_species" > "$TARGET_METADATA_TSV"
 # Recover target genome/species labels from the original FAA files when present.
 if [[ -d "$FASTAS_DIR" ]]; then
+    echo "Using target FAA directory: $FASTAS_DIR"
     for faa in "$FASTAS_DIR"/*.faa; do
         [[ -f "$faa" ]] || continue
         genome=$(basename "$faa" .faa)
@@ -234,13 +244,43 @@ echo "  Metadata: $METADATA_TSV"
 echo "  Query DB: $QUERY_DB"
 echo "Searching against: $TARGET_DB"
 
+SEARCH_ARGS=()
+if [[ -n "${FOLDSEEK_SPLIT_MEMORY_LIMIT:-}" ]]; then
+    SEARCH_ARGS+=("--split-memory-limit" "$FOLDSEEK_SPLIT_MEMORY_LIMIT")
+fi
+if [[ -n "${FOLDSEEK_MAX_SEQS:-}" ]]; then
+    SEARCH_ARGS+=("--max-seqs" "$FOLDSEEK_MAX_SEQS")
+fi
+if [[ -n "${FOLDSEEK_SEARCH_ARGS:-}" ]]; then
+    # Extra advanced Foldseek search options, for example:
+    #   FOLDSEEK_SEARCH_ARGS="--split-memory-limit 40G --max-seqs 100"
+    # shellcheck disable=SC2206
+    EXTRA_SEARCH_ARGS=($FOLDSEEK_SEARCH_ARGS)
+    SEARCH_ARGS+=("${EXTRA_SEARCH_ARGS[@]}")
+fi
+
+if [[ ${#SEARCH_ARGS[@]} -gt 0 ]]; then
+    echo "Extra Foldseek search args: ${SEARCH_ARGS[*]}"
+fi
+
 # Search all extracted 3Di domain queries against the detected Foldseek DB.
-"$FOLDSEEK_BIN" search \
+SEARCH_CMD=(
+    "$FOLDSEEK_BIN" search \
     "$QUERY_DB" \
     "$TARGET_DB" \
     "$RESULT_PREFIX" \
     "$TMP_DIR" \
     --threads "$THREADS"
+)
+if [[ ${#SEARCH_ARGS[@]} -gt 0 ]]; then
+    SEARCH_CMD+=("${SEARCH_ARGS[@]}")
+fi
+"${SEARCH_CMD[@]}"
+
+if [[ ! -e "$RESULT_PREFIX.index" ]]; then
+    echo "ERROR: Foldseek search finished without creating $RESULT_PREFIX.index" >&2
+    exit 1
+fi
 
 "$FOLDSEEK_BIN" convertalis \
     "$QUERY_DB" \
@@ -269,7 +309,9 @@ awk -F '\t' -v OFS='\t' '
         genome_species = ($2 in target_genome_species) ? target_genome_species[$2] : "NA"
         print $0, genome_species
     }
-' "$TARGET_METADATA_TSV" "$RESULT_FULL_RAW_TSV" > "$RESULT_FULL_TSV"
+' "$TARGET_METADATA_TSV" "$RESULT_FULL_RAW_TSV" > "$RESULT_FULL_TSV.tmp"
+
+mv "$RESULT_FULL_TSV.tmp" "$RESULT_FULL_TSV"
 
 echo "Done."
 echo "  Default results: $RESULT_TSV"

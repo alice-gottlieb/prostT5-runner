@@ -6,6 +6,7 @@ Examples:
     uv run python top_pfam_hits.py PF00004 10 --unique-target
     uv run python top_pfam_hits.py PF00004.36 10 --score full
     uv run python top_pfam_hits.py PF00198 5 -i pfam_hits2-1by1/GCF_000005845.2.with_3di.domtblout
+    uv run python top_pfam_hits.py --all-domains 10 -o all_top_hits.tsv
 """
 
 from __future__ import annotations
@@ -50,6 +51,13 @@ class PfamHit:
     three_di_sequence: str
 
 
+@dataclass(frozen=True)
+class PfamDomain:
+    accession: str
+    pfam_id: str
+    description: str
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -59,12 +67,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "domain",
+        nargs="?",
         help=(
             "Pfam domain query name or accession. Examples: AAA, PF00004, "
             "PF00004.36."
         ),
     )
-    parser.add_argument("n", type=int, help="Number of top hits to print.")
+    parser.add_argument("n", nargs="?", type=int, help="Number of top hits to print.")
     parser.add_argument(
         "-i",
         "--input",
@@ -99,6 +108,23 @@ def parse_args() -> argparse.Namespace:
         "--output",
         type=Path,
         help="Write TSV output to this path instead of stdout.",
+    )
+    parser.add_argument(
+        "--all-domains",
+        action="store_true",
+        help=(
+            "Find the top N hits for every Pfam domain listed in "
+            "--pfam-domains."
+        ),
+    )
+    parser.add_argument(
+        "--pfam-domains",
+        type=Path,
+        default=Path("pfam_domains.tsv"),
+        help=(
+            "TSV containing pfam_accession, pfam_id, and description columns. "
+            "Used with --all-domains."
+        ),
     )
     return parser.parse_args()
 
@@ -213,71 +239,196 @@ def select_top_hits(hits: Iterable[PfamHit], score: str, n: int) -> list[PfamHit
     return sorted(hits, key=lambda hit: hit_sort_key(hit, score))[:n]
 
 
-def write_hits(hits: list[PfamHit], output_path: Path | None) -> None:
-    columns = [
-        "rank",
-        "target_name",
-        "domain_name",
-        "domain_accession",
-        "full_score",
-        "full_evalue",
-        "domain_score",
-        "independent_evalue",
-        "domain_number",
-        "domain_count",
-        "ali_from",
-        "ali_to",
-        "env_from",
-        "env_to",
-        "accuracy",
-        "source_file",
-        "description",
-        "3di_sequence",
+def output_columns(prefix_domain: bool = False) -> list[str]:
+    columns = []
+    if prefix_domain:
+        columns.extend(
+            [
+                "query_pfam_accession",
+                "query_pfam_id",
+                "query_pfam_description",
+            ]
+        )
+    columns.extend(
+        [
+            "rank",
+            "target_name",
+            "domain_name",
+            "domain_accession",
+            "full_score",
+            "full_evalue",
+            "domain_score",
+            "independent_evalue",
+            "domain_number",
+            "domain_count",
+            "ali_from",
+            "ali_to",
+            "env_from",
+            "env_to",
+            "accuracy",
+            "source_file",
+            "description",
+            "3di_sequence",
+        ]
+    )
+    return columns
+
+
+def hit_values(hit: PfamHit, rank: int) -> list[object]:
+    return [
+        rank,
+        hit.target_name,
+        hit.domain_name,
+        hit.domain_accession,
+        hit.full_score,
+        hit.full_evalue,
+        hit.domain_score,
+        hit.independent_evalue,
+        hit.domain_number,
+        hit.domain_count,
+        hit.ali_from,
+        hit.ali_to,
+        hit.env_from,
+        hit.env_to,
+        hit.accuracy,
+        hit.source_file,
+        hit.description,
+        hit.three_di_sequence,
     ]
 
+
+def open_output(output_path: Path | None):
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        return output_path.open("w", newline="")
+    return sys.stdout
 
-    handle = output_path.open("w", newline="") if output_path else sys.stdout
+
+def write_hits(hits: list[PfamHit], output_path: Path | None) -> None:
+    handle = open_output(output_path)
     try:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
-        writer.writerow(columns)
+        writer.writerow(output_columns())
         for rank, hit in enumerate(hits, start=1):
-            writer.writerow(
-                [
-                    rank,
-                    hit.target_name,
-                    hit.domain_name,
-                    hit.domain_accession,
-                    hit.full_score,
-                    hit.full_evalue,
-                    hit.domain_score,
-                    hit.independent_evalue,
-                    hit.domain_number,
-                    hit.domain_count,
-                    hit.ali_from,
-                    hit.ali_to,
-                    hit.env_from,
-                    hit.env_to,
-                    hit.accuracy,
-                    hit.source_file,
-                    hit.description,
-                    hit.three_di_sequence,
-                ]
-            )
+            writer.writerow(hit_values(hit, rank))
     finally:
         if output_path:
             handle.close()
 
 
-def main() -> int:
-    args = parse_args()
+def read_pfam_domains(path: Path) -> list[PfamDomain]:
+    if not path.is_file():
+        raise SystemExit(f"Pfam domains file not found: {path}")
+
+    domains: list[PfamDomain] = []
+    with path.open(newline="") as handle:
+        reader = csv.reader(handle, delimiter="\t")
+        for row_number, row in enumerate(reader, start=1):
+            if not row:
+                continue
+            if row_number == 1 and row[0] == "pfam_accession":
+                continue
+            if len(row) < 3:
+                print(
+                    f"WARN: skipped malformed Pfam domain row {path}:{row_number}",
+                    file=sys.stderr,
+                )
+                continue
+            domains.append(PfamDomain(row[0], row[1], row[2]))
+
+    return domains
+
+
+def group_hits_by_domain(hits: Iterable[PfamHit]) -> dict[str, list[PfamHit]]:
+    grouped: dict[str, list[PfamHit]] = {}
+    for hit in hits:
+        grouped.setdefault(normalize_domain(hit.domain_accession), []).append(hit)
+        grouped.setdefault(normalize_domain(hit.domain_name), []).append(hit)
+    return grouped
+
+
+def write_all_domain_hits(
+    domains: list[PfamDomain],
+    grouped_hits: dict[str, list[PfamHit]],
+    score: str,
+    n: int,
+    unique_target: bool,
+    output_path: Path | None,
+) -> tuple[int, int]:
+    domains_with_hits = 0
+    rows_written = 0
+    handle = open_output(output_path)
+    try:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(output_columns(prefix_domain=True))
+        for domain in domains:
+            hits = grouped_hits.get(normalize_domain(domain.accession), [])
+            if unique_target:
+                hits = best_per_target(hits, score)
+            top_hits = select_top_hits(hits, score, n)
+            if not top_hits:
+                continue
+
+            domains_with_hits += 1
+            rows_written += len(top_hits)
+            for rank, hit in enumerate(top_hits, start=1):
+                writer.writerow(
+                    [
+                        domain.accession,
+                        domain.pfam_id,
+                        domain.description,
+                        *hit_values(hit, rank),
+                    ]
+                )
+    finally:
+        if output_path:
+            handle.close()
+
+    return domains_with_hits, rows_written
+
+
+def parse_n(args: argparse.Namespace) -> int:
+    if args.all_domains and args.n is None and args.domain is not None:
+        try:
+            args.n = int(args.domain)
+        except ValueError:
+            pass
+        else:
+            args.domain = None
+
+    if args.n is None:
+        raise SystemExit("n is required")
     if args.n < 1:
         raise SystemExit("n must be at least 1")
+    return args.n
+
+
+def main() -> int:
+    args = parse_args()
+    n = parse_n(args)
+    if not args.all_domains and args.domain is None:
+        raise SystemExit("domain is required unless --all-domains is used")
 
     paths = domtblout_files(args.input, args.include_plain)
     if not paths:
         raise SystemExit(f"No .with_3di.domtblout files found in {args.input}")
+
+    if args.all_domains:
+        domains = read_pfam_domains(args.pfam_domains)
+        grouped_hits = group_hits_by_domain(iter_hits(paths))
+        domains_with_hits, rows_written = write_all_domain_hits(
+            domains=domains,
+            grouped_hits=grouped_hits,
+            score=args.score,
+            n=n,
+            unique_target=args.unique_target,
+            output_path=args.output,
+        )
+        print(
+            f"Wrote {rows_written} hit row(s) for {domains_with_hits}/"
+            f"{len(domains)} Pfam domain(s)."
+        )
+        return 0
 
     matching_hits = [
         hit for hit in iter_hits(paths) if domain_matches(hit, args.domain)
@@ -285,7 +436,7 @@ def main() -> int:
     if args.unique_target:
         matching_hits = best_per_target(matching_hits, args.score)
 
-    top_hits = select_top_hits(matching_hits, args.score, args.n)
+    top_hits = select_top_hits(matching_hits, args.score, n)
     if not top_hits:
         searched_files = ", ".join(path.name for path in paths)
         raise SystemExit(
@@ -296,9 +447,9 @@ def main() -> int:
     write_hits(top_hits, args.output)
     if args.output:
         print(f"Wrote {len(top_hits)} hit(s) to {args.output}")
-    elif len(top_hits) < args.n:
+    elif len(top_hits) < n:
         print(
-            f"# Only found {len(top_hits)} hit(s) for {args.domain}; requested {args.n}.",
+            f"# Only found {len(top_hits)} hit(s) for {args.domain}; requested {n}.",
             file=sys.stderr,
         )
     return 0

@@ -126,6 +126,15 @@ def parse_args() -> argparse.Namespace:
             "Used with --all-domains."
         ),
     )
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=1000,
+        help=(
+            "Print and flush progress every N parsed hit rows and every N Pfam "
+            "domains in --all-domains mode. Use 0 to disable periodic updates."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -202,8 +211,14 @@ def parse_domtblout_row(line: str, source_file: Path) -> PfamHit | None:
     )
 
 
-def iter_hits(paths: Iterable[Path]) -> Iterable[PfamHit]:
+def log_progress(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+def iter_hits(paths: Iterable[Path], progress_interval: int = 1000) -> Iterable[PfamHit]:
     for path in paths:
+        log_progress(f"Reading hits from {path}")
+        parsed_rows = 0
         with path.open() as handle:
             for line_number, line in enumerate(handle, start=1):
                 if line.startswith("#") or not line.strip():
@@ -214,10 +229,15 @@ def iter_hits(paths: Iterable[Path]) -> Iterable[PfamHit]:
                     print(
                         f"WARN: skipped malformed row {path}:{line_number}: {exc}",
                         file=sys.stderr,
+                        flush=True,
                     )
                     continue
                 if hit is not None:
+                    parsed_rows += 1
+                    if progress_interval > 0 and parsed_rows % progress_interval == 0:
+                        log_progress(f"  parsed {parsed_rows} hit row(s) from {path}")
                     yield hit
+        log_progress(f"Finished {path}: parsed {parsed_rows} hit row(s)")
 
 
 def hit_sort_key(hit: PfamHit, score: str) -> tuple[float, float, str, int]:
@@ -332,6 +352,7 @@ def read_pfam_domains(path: Path) -> list[PfamDomain]:
                 print(
                     f"WARN: skipped malformed Pfam domain row {path}:{row_number}",
                     file=sys.stderr,
+                    flush=True,
                 )
                 continue
             domains.append(PfamDomain(row[0], row[1], row[2]))
@@ -339,21 +360,74 @@ def read_pfam_domains(path: Path) -> list[PfamDomain]:
     return domains
 
 
-def group_hits_by_domain(hits: Iterable[PfamHit]) -> dict[str, list[PfamHit]]:
-    grouped: dict[str, list[PfamHit]] = {}
+def domain_key_lookup(domains: Iterable[PfamDomain]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for domain in domains:
+        lookup[normalize_domain(domain.accession)] = domain.accession
+        lookup[normalize_domain(domain.pfam_id)] = domain.accession
+    return lookup
+
+
+def hit_domain_accession(
+    hit: PfamHit,
+    lookup: dict[str, str],
+) -> str | None:
+    return lookup.get(normalize_domain(hit.domain_accession)) or lookup.get(
+        normalize_domain(hit.domain_name)
+    )
+
+
+def trim_candidates(
+    candidates: list[PfamHit],
+    score: str,
+    n: int,
+) -> list[PfamHit]:
+    return select_top_hits(candidates, score, n)
+
+
+def collect_all_domain_candidates(
+    hits: Iterable[PfamHit],
+    domains: list[PfamDomain],
+    score: str,
+    n: int,
+    unique_target: bool,
+) -> dict[str, list[PfamHit]] | dict[str, dict[str, PfamHit]]:
+    lookup = domain_key_lookup(domains)
+
+    if unique_target:
+        unique_candidates: dict[str, dict[str, PfamHit]] = {}
+        for hit in hits:
+            accession = hit_domain_accession(hit, lookup)
+            if accession is None:
+                continue
+            target_hits = unique_candidates.setdefault(accession, {})
+            current = target_hits.get(hit.target_name)
+            if current is None or hit_sort_key(hit, score) < hit_sort_key(current, score):
+                target_hits[hit.target_name] = hit
+        return unique_candidates
+
+    candidates: dict[str, list[PfamHit]] = {}
+    trim_at = max(n * 4, 100)
+    keep_at = max(n * 2, n)
     for hit in hits:
-        grouped.setdefault(normalize_domain(hit.domain_accession), []).append(hit)
-        grouped.setdefault(normalize_domain(hit.domain_name), []).append(hit)
-    return grouped
+        accession = hit_domain_accession(hit, lookup)
+        if accession is None:
+            continue
+        domain_candidates = candidates.setdefault(accession, [])
+        domain_candidates.append(hit)
+        if len(domain_candidates) > trim_at:
+            candidates[accession] = trim_candidates(domain_candidates, score, keep_at)
+    return candidates
 
 
 def write_all_domain_hits(
     domains: list[PfamDomain],
-    grouped_hits: dict[str, list[PfamHit]],
+    candidates: dict[str, list[PfamHit]] | dict[str, dict[str, PfamHit]],
     score: str,
     n: int,
     unique_target: bool,
     output_path: Path | None,
+    progress_interval: int,
 ) -> tuple[int, int]:
     domains_with_hits = 0
     rows_written = 0
@@ -361,12 +435,22 @@ def write_all_domain_hits(
     try:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
         writer.writerow(output_columns(prefix_domain=True))
-        for domain in domains:
-            hits = grouped_hits.get(normalize_domain(domain.accession), [])
+        handle.flush()
+        for domain_number, domain in enumerate(domains, start=1):
+            if progress_interval > 0 and domain_number % progress_interval == 0:
+                log_progress(
+                    f"Processed {domain_number}/{len(domains)} Pfam domain(s); "
+                    f"wrote {rows_written} hit row(s)"
+                )
             if unique_target:
-                hits = best_per_target(hits, score)
+                domain_candidates = candidates.get(domain.accession, {})
+                hits = list(domain_candidates.values())
+            else:
+                domain_candidates = candidates.get(domain.accession, [])
+                hits = domain_candidates
             top_hits = select_top_hits(hits, score, n)
             if not top_hits:
+                handle.flush()
                 continue
 
             domains_with_hits += 1
@@ -380,6 +464,7 @@ def write_all_domain_hits(
                         *hit_values(hit, rank),
                     ]
                 )
+            handle.flush()
     finally:
         if output_path:
             handle.close()
@@ -400,6 +485,8 @@ def parse_n(args: argparse.Namespace) -> int:
         raise SystemExit("n is required")
     if args.n < 1:
         raise SystemExit("n must be at least 1")
+    if args.progress_interval < 0:
+        raise SystemExit("--progress-interval must be >= 0")
     return args.n
 
 
@@ -414,27 +501,46 @@ def main() -> int:
         raise SystemExit(f"No .with_3di.domtblout files found in {args.input}")
 
     if args.all_domains:
+        log_progress(f"Reading Pfam domain list from {args.pfam_domains}")
         domains = read_pfam_domains(args.pfam_domains)
-        grouped_hits = group_hits_by_domain(iter_hits(paths))
+        log_progress(f"Loaded {len(domains)} Pfam domain(s)")
+        log_progress(
+            f"Collecting top hit candidates from {len(paths)} domtblout file(s)"
+        )
+        candidates = collect_all_domain_candidates(
+            hits=iter_hits(paths, progress_interval=args.progress_interval),
+            domains=domains,
+            score=args.score,
+            n=n,
+            unique_target=args.unique_target,
+        )
+        log_progress(f"Collected candidates for {len(candidates)} Pfam domain(s)")
+        log_progress("Writing top hits for each Pfam domain")
         domains_with_hits, rows_written = write_all_domain_hits(
             domains=domains,
-            grouped_hits=grouped_hits,
+            candidates=candidates,
             score=args.score,
             n=n,
             unique_target=args.unique_target,
             output_path=args.output,
+            progress_interval=args.progress_interval,
         )
-        print(
+        log_progress(
             f"Wrote {rows_written} hit row(s) for {domains_with_hits}/"
             f"{len(domains)} Pfam domain(s)."
         )
         return 0
 
+    log_progress(f"Searching for top {n} hit(s) for {args.domain}")
     matching_hits = [
-        hit for hit in iter_hits(paths) if domain_matches(hit, args.domain)
+        hit
+        for hit in iter_hits(paths, progress_interval=args.progress_interval)
+        if domain_matches(hit, args.domain)
     ]
+    log_progress(f"Found {len(matching_hits)} matching hit row(s) for {args.domain}")
     if args.unique_target:
         matching_hits = best_per_target(matching_hits, args.score)
+        log_progress(f"Kept {len(matching_hits)} best unique target hit row(s)")
 
     top_hits = select_top_hits(matching_hits, args.score, n)
     if not top_hits:
@@ -446,11 +552,12 @@ def main() -> int:
 
     write_hits(top_hits, args.output)
     if args.output:
-        print(f"Wrote {len(top_hits)} hit(s) to {args.output}")
+        print(f"Wrote {len(top_hits)} hit(s) to {args.output}", flush=True)
     elif len(top_hits) < n:
         print(
             f"# Only found {len(top_hits)} hit(s) for {args.domain}; requested {n}.",
             file=sys.stderr,
+            flush=True,
         )
     return 0
 

@@ -14,6 +14,25 @@ Outputs:
   <out>/genome_counts.tsv      Wide count matrix: rows = genome, cols = query_id,
                                values = hit count.
 
+Examples:
+  # Small local CPU smoke test.
+  uv run python foldseek_topn_pfam.py pf00198_top5.tsv \
+      results_fs_only_full_fs_compare/foldseek_db/sequenceDB \
+      foldseek_topn_pfam_pf00198_test_out \
+      --foldseek ~/foldseek/bin/foldseek --gpu 0 --threads 2 --max-seqs 5
+
+  # Test subset from an all-Pfam top-N table.
+  uv run python foldseek_topn_pfam.py all_pfam_top10_hits.tsv \
+      results_fs_only_full_fs_compare/foldseek_db/sequenceDB \
+      foldseek_topn_pfam_test_out \
+      --foldseek ~/foldseek/bin/foldseek --gpu 0 --threads 2 --max-seqs 5 --test
+
+  # Server-style run with regular flushed progress messages.
+  uv run python foldseek_topn_pfam.py all_pfam_top50_hits.tsv /path/to/targetDB \
+      foldseek_topn_pfam_out \
+      --foldseek ~/foldseek/bin/foldseek --threads 16 --gpu 1 \
+      --split-memory-limit 40G --progress-interval 1000
+
 Test subset (--test) keeps only the top 5 rows of the first 3 Pfam accessions.
 """
 
@@ -40,6 +59,20 @@ GENOME_RE = re.compile(r"(GC[FA]_\d+\.\d+)")
 def log(message: str) -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] {message}", flush=True)
+
+
+def fresh_dir(path: Path) -> Path:
+    """Remove `path` if present, then create it empty. Returns the path."""
+    shutil.rmtree(path, ignore_errors=True)
+    path.mkdir(parents=True)
+    return path
+
+
+def run_foldseek(foldseek: str, subcommand: str, *cmd_args: object) -> None:
+    """Run a foldseek subcommand, stringifying each argument and logging it."""
+    cmd = [foldseek, subcommand, *(str(arg) for arg in cmd_args)]
+    log(f"Running foldseek {subcommand}: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
 
 
 @dataclass(frozen=True)
@@ -167,9 +200,7 @@ def write_query_db(queries: list[Query], output_dir: Path,
 
     Mirrors the byte layout used by build_extracted_3di_query_db.py.
     """
-    query_db_dir = output_dir / "query_db"
-    shutil.rmtree(query_db_dir, ignore_errors=True)
-    query_db_dir.mkdir(parents=True)
+    query_db_dir = fresh_dir(output_dir / "query_db")
     query_db = query_db_dir / "queryDB"
     metadata_tsv = output_dir / "query_metadata.tsv"
 
@@ -228,26 +259,26 @@ def write_query_db(queries: list[Query], output_dir: Path,
     return query_db, metadata_tsv
 
 
+FOLDSEEK_COLUMNS = ["query", "target", "fident", "alnlen", "mismatch",
+                    "gapopen", "qstart", "qend", "tstart", "tend",
+                    "evalue", "bits"]
+
+
 def run_foldseek_search(args: argparse.Namespace, query_db: Path,
                         output_dir: Path) -> Path:
     result_prefix = output_dir / "result"
-    tmp_dir = output_dir / "tmp_search"
-    shutil.rmtree(tmp_dir, ignore_errors=True)
-    tmp_dir.mkdir(parents=True)
+    tmp_dir = fresh_dir(output_dir / "tmp_search")
 
-    cmd = [
-        args.foldseek, "search",
-        str(query_db), str(args.target_db),
-        str(result_prefix), str(tmp_dir),
-        "--threads", str(args.threads),
-        "--gpu", str(args.gpu),
+    options = [
+        "--threads", args.threads,
+        "--gpu", args.gpu,
         "--split-memory-limit", args.split_memory_limit,
     ]
     if args.max_seqs is not None:
-        cmd += ["--max-seqs", str(args.max_seqs)]
+        options += ["--max-seqs", args.max_seqs]
 
-    log(f"Running Foldseek search: {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+    run_foldseek(args.foldseek, "search",
+                 query_db, args.target_db, result_prefix, tmp_dir, *options)
 
     if not Path(f"{result_prefix}.index").exists():
         sys.exit(f"ERROR: foldseek search produced no {result_prefix}.index")
@@ -258,20 +289,12 @@ def run_foldseek_search(args: argparse.Namespace, query_db: Path,
 def run_convertalis(foldseek: str, query_db: Path, target_db: Path,
                     result_prefix: Path, out_tsv: Path, threads: int,
                     extra_format: bool) -> None:
-    cmd = [foldseek, "convertalis", str(query_db), str(target_db),
-           str(result_prefix), str(out_tsv), "--threads", str(threads)]
+    options = ["--threads", threads]
     if extra_format:
-        cmd += ["--format-output",
-                "query,target,fident,alnlen,mismatch,gapopen,qstart,qend,"
-                "tstart,tend,evalue,bits"]
-    log(f"Running Foldseek convertalis: {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+        options += ["--format-output", ",".join(FOLDSEEK_COLUMNS)]
+    run_foldseek(foldseek, "convertalis",
+                 query_db, target_db, result_prefix, out_tsv, *options)
     log(f"Foldseek convertalis finished: {out_tsv}")
-
-
-FOLDSEEK_COLUMNS = ["query", "target", "fident", "alnlen", "mismatch",
-                    "gapopen", "qstart", "qend", "tstart", "tend",
-                    "evalue", "bits"]
 
 
 def load_target_genome_map(path: Path | None) -> dict[str, str]:

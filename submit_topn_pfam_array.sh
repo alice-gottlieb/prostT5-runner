@@ -31,7 +31,7 @@ set -euo pipefail
 TARGET_DB="$SCRATCH/all_3dis_fully_merged_2026-05-06/mergedDB"   # verify prefix before submit
 CHUNKS_DIR="$SCRATCH/pfam_chunks_test"
 OUTPUT_BASE="$SCRATCH/foldseek_topn_pfam_array_test"
-FOLDSEEK_BIN="$HOME/foldseek/bin/foldseek"
+FOLDSEEK_BIN="$HOME/prostT5-runner/foldseek/bin/foldseek"
 THREADS=8
 SPLIT_MEMORY_LIMIT="40G"
 

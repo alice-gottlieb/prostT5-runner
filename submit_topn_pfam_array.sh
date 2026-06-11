@@ -28,7 +28,8 @@ ulimit -c 0
 set -euo pipefail
 
 # --- Configuration --------------------------------------------------------
-TARGET_DB="$SCRATCH/all_3dis_fully_merged_2026-05-06/mergedDB"   # verify prefix before submit
+# Padded GPU target DB built by make_padded_target_db.sh (required for --gpu 1).
+TARGET_DB="$SCRATCH/all_3dis_fully_merged_2026-05-06_gpu_pad/mergedDB_pad"
 CHUNKS_DIR="$SCRATCH/pfam_chunks_test"
 OUTPUT_BASE="$SCRATCH/foldseek_topn_pfam_array_test"
 FOLDSEEK_BIN="$HOME/prostT5-runner/foldseek/bin/foldseek"

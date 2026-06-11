@@ -88,9 +88,15 @@ or `GPU_NODES_AT_A_GLANCE_WITH_USED_GPUs`. See `resource-spec.md`.
 Prefer **git** for code; `scp`/`rsync` for data and artifacts that aren't in git.
 Results and scratch data are **not** committed.
 
+The cluster checkout's working tree is **usually dirty** (many locally-modified
+and untracked files). So always pull with `--ff-only`: it fast-forwards cleanly
+when the incoming commits don't touch a locally-modified file, and otherwise
+**refuses without merging** rather than leaving a conflicted tree. If `--ff-only`
+is rejected, stop and ask the user — do not merge, stash, or force.
+
 ```bash
 # code: commit/push locally, then pull on the cluster
-ssh hoffman2 'cd ~/prostT5-runner && git pull'
+ssh hoffman2 'cd ~/prostT5-runner && git pull --ff-only origin main'
 
 # pull a results dir from scratch back to repo-local tmp/ (gitignored)
 scp -r hoffman2:/u/scratch/a/aliceg/{run_dir} tmp/

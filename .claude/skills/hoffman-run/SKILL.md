@@ -45,13 +45,33 @@ This is the default way to run anything non-trivial. The loop:
    ssh hoffman2 'qstat -u aliceg'          # or: myjobs -u aliceg
    ssh hoffman2 'tail -n 50 {OUTPUT_LOG}'  # the path from `#$ -o`
    ```
-   States: `qw` = queued/waiting, `r` = running, `Eqw` = error (stuck — inspect,
-   then `qdel` and resubmit). The log file only appears **after** the job starts.
+   States: `qw` = queued/waiting, `r` = running, `Eqw` = error (stuck — see
+   "Did it actually succeed?" below). The log file only appears **after** the
+   job starts.
 5. **Cancel / inspect:**
    ```bash
-   ssh hoffman2 'qdel {jobid}'
-   ssh hoffman2 'qacct -j {jobid}'   # accounting/exit status for a finished job
+   ssh hoffman2 'qdel {jobid}'         # qdel {jobid} -t {a-b} cancels an array subrange
+   ssh hoffman2 'qacct -j {jobid}'     # accounting/exit status for a finished job
    ```
+
+### Did it actually succeed?
+
+**A job leaving `qstat` does NOT mean it succeeded** — a failed job also
+disappears. Always confirm with `qacct -j {jobid}` and read **both** fields:
+
+- `failed 0` **and** `exit_status 0` → success.
+- `failed 0` but `exit_status {N≠0}` → the scheduler was fine but **your command
+  exited non-zero** (the most common real failure; the log has the traceback).
+- `failed 44 : execd enforced h_rt limit`, `exit_status 137` → **killed for
+  exceeding `h_rt`** (raise the runtime and resubmit). `137 = 128 + SIGKILL`.
+- State `Eqw` (never ran) → a submit/setup error. Get the reason with
+  `qstat -j {jobid}` (e.g. an `#$ -o` directory that doesn't exist →
+  "can't make directory … Permission denied"). Fix the script, then clear it:
+  an `Eqw` job often won't clear on a plain `qdel` — use **`qdel -f {jobid}`** —
+  before resubmitting.
+
+For an array, check tasks individually: `qacct -j {jobid}` lists every task, and
+each has its own `exit_status`.
 
 For work that splits across many nodes (per-chunk, per-genome, parametric
 sweeps), use an **array job** — see `array-jobs.md`. Worked example:
@@ -136,7 +156,10 @@ Two rules you need at submit time:
 
 - **`h_data` is per-core.** Total job memory = `h_data` × number of cores
   (`-pe shared N`). E.g. `h_data=2G` with `-pe shared 4` = 8G total.
-- **Logs appear only after the job starts running** (state `r`), not while `qw`.
+- **Logs appear only after the job starts running** (state `r`), not while `qw`;
+  you can `tail` a running job's log mid-run for live progress.
+- **A vanished job isn't a passed job** — verify with `qacct` (see "Did it
+  actually succeed?"). An `Eqw` job usually needs **`qdel -f`** to clear.
 - **`$SCRATCH` is purged periodically** — don't treat it as permanent storage.
 - **Slow `highp` start?** If a `highp` CPU job sits queued >5–15 min, resubmit
   without `highp`.

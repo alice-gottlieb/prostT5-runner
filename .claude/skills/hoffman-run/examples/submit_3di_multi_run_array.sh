@@ -1,4 +1,9 @@
 #!/bin/bash
+# ILLUSTRATIVE EXAMPLE — a real multi-run GPU array job. The resources, paths,
+# and accessions below are aliceg-specific; copy this and adapt them before
+# submitting. Some header comments (A100/L40S/V100, split_accessions.py) and the
+# commented-out blocks are leftovers and don't match the actual H200 -l line.
+# See array-jobs.md for the array mechanics and resource-spec.md for GPU flags.
 #$ -cwd
 #$ -o /u/scratch/a/aliceg/logs/all_3di/final9k_chunk20/final.multirun.h200.all_3di.$JOB_ID.$TASK_ID.out
 #$ -j y

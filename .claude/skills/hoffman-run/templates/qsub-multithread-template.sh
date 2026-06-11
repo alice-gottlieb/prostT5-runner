@@ -1,4 +1,6 @@
 #!/bin/bash
+# Multi-core qsub template (total memory = h_data * cores).
+# See resource-spec.md for the -l resource values (GPU types, highp, etc.).
 #$ -cwd
 #$ -o joblog.$JOB_ID
 #$ -j y
@@ -10,7 +12,7 @@
 ## Number specified is the number of cores.
 #$ -pe shared 4
 # Email address to notify
-#$ -M $USER@mail
+#$ -M $USER@ucla.edu
 ## Send email at the beginning (b), end (e), and if the job is aborted (a)
 ## Can remove 'b' if you don't want to receive an email when the job starts, 
 ## 'e' if you don't want to receive an email when the job ends, 

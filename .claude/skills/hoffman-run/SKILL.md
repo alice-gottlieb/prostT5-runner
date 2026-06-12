@@ -163,6 +163,7 @@ Two rules you need at submit time:
 - **`$SCRATCH` is purged periodically** — don't treat it as permanent storage.
 - **Slow `highp` start?** If a `highp` CPU job sits queued >5–15 min, resubmit
   without `highp`.
+- Don't hit the cluster too often. Find ways to keep a connection open for longer periods of time and reuse the connection (e.g. tmux)
 
 ## Help / escalation
 

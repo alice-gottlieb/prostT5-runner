@@ -359,7 +359,7 @@ def run_sharded_search_and_merge(args: argparse.Namespace, query_db: Path,
 
     for shard in shards:
         tag = f"_{shard.name}"
-        result_prefix = run_foldseek_search(args, output_dir, query_db, shard, tag)
+        result_prefix = run_foldseek_search(args, query_db, output_dir, shard, tag)
         shard_tsv = output_dir / f"results{tag}.tsv"
         run_convertalis(args.foldseek, query_db, shard, result_prefix,
                         shard_tsv, args.threads, extra_format=True)

@@ -18,6 +18,10 @@ set -euo pipefail
 # Which production chunk to run (qsub -v CHUNK_ID=01 to override; default 05).
 CHUNK_ID="${CHUNK_ID:-05}"
 SHARDS_DIR="$SCRATCH/rtx_shards_pad"
+# Full (non-padded) merged DB: used for the structurealign + convertalis so the
+# E-values are the true full-DB values. The padded shards are only for the GPU
+# ungapped prefilter.
+FULL_DB="$SCRATCH/all_3dis_fully_merged_2026-05-06/mergedDB"
 CHUNK="$SCRATCH/pfam_chunks/pfam_chunk_${CHUNK_ID}.tsv"
 TASK_OUTPUT="$SCRATCH/rtx_vs_h200_test/rtx_chunk${CHUNK_ID}"
 TARGET_GENOME_MAP="$SCRATCH/target_genome_map_full/full_map.tsv"
@@ -41,12 +45,11 @@ trap 'kill "$MON_PID" 2>/dev/null || true' EXIT
 
 uv run python -u ~/prostT5-runner/foldseek_topn_pfam.py \
     "$CHUNK" \
+    "$FULL_DB" \
     "$TASK_OUTPUT" \
     --target-shards "$SHARDS_DIR" \
     --foldseek "$FOLDSEEK_BIN" \
-    --gpu 1 \
     --threads 8 \
-    --split-memory-limit 8G \
     --target-genome-map "$TARGET_GENOME_MAP" \
     --progress-interval 200
 

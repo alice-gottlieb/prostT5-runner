@@ -50,6 +50,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from build_merged_prefilter import build_merged_prefilter
+
 SEQUENCE_DBTYPE = b"\x00\x00\x00\x00"
 HEADER_DBTYPE = b"\x0c\x00\x00\x00"
 
@@ -91,9 +93,10 @@ def parse_args() -> argparse.Namespace:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("input_tsv", type=Path,
                    help="TSV with target_name, rank, 3di_sequence, source_file, and query_pfam_accession or domain_accession columns.")
-    p.add_argument("target_db", type=Path, nargs="?", default=None,
-                   help="Foldseek target DB prefix (e.g. /path/to/merged3diDB). "
-                        "Omit when using --target-shards.")
+    p.add_argument("target_db", type=Path,
+                   help="Full Foldseek target DB prefix (e.g. /path/to/merged3diDB). "
+                        "With --target-shards this is the DB the merged prefilter is "
+                        "aligned against (so E-values are full-DB values).")
     p.add_argument("output_dir", type=Path,
                    help="Directory to write hits.tsv, genome_counts.tsv, query_db/, etc.")
     p.add_argument("--foldseek", default=str(Path.home() / "foldseek" / "bin" / "foldseek"),
@@ -114,14 +117,13 @@ def parse_args() -> argparse.Namespace:
                    help="Optional cap on hits per query (passed as foldseek --max-seqs).")
     p.add_argument("--target-shards", type=Path, default=None,
                    help="Directory of padded shard DBs (prefixes named *_pad) that "
-                        "together partition the full target DB. Used instead of "
-                        "target_db to fit a large DB into limited GPU VRAM: each "
-                        "shard is searched separately, then results are merged as "
-                        "if searched against the whole DB (e-values rescaled by the "
-                        "shard count, then re-thresholded and capped per query).")
+                        "together partition the full target_db. Enables GPU search "
+                        "on a small card: the GPU ungapped prefilter runs per shard "
+                        "(each fits VRAM), and the merged global top hits are aligned "
+                        "against the full target_db, so E-values are full-DB values.")
     p.add_argument("--merge-max-seqs", type=int, default=1000,
-                   help="When merging shard results, keep at most this many hits "
-                        "per query (mirrors foldseek's prefilter --max-seqs).")
+                   help="Keep at most this many prefilter hits per query when "
+                        "merging shards (mirrors foldseek's prefilter --max-seqs).")
     p.add_argument("--target-genome-map", type=Path, default=None,
                    help="Optional TSV mapping target_id -> genome. First two columns used, header skipped.")
     p.add_argument("--test", action="store_true",
@@ -130,10 +132,7 @@ def parse_args() -> argparse.Namespace:
                    help="Keep foldseek tmp search directory.")
     p.add_argument("--progress-interval", type=int, default=1000,
                    help="Flush progress every N input/output rows. Use 0 to disable periodic progress logs.")
-    args = p.parse_args()
-    if (args.target_db is None) == (args.target_shards is None):
-        p.error("provide exactly one of target_db or --target-shards.")
-    return args
+    return p.parse_args()
 
 
 def load_queries(tsv: Path, test_mode: bool, progress_interval: int) -> list[Query]:
@@ -324,10 +323,27 @@ def run_convertalis(foldseek: str, query_db: Path, target_db: Path,
     log(f"Foldseek convertalis finished: {out_tsv}")
 
 
-# foldseek search's default -e: hits with a larger E-value are not reported.
-SEARCH_EVALUE = 10.0
-EVALUE_COL = FOLDSEEK_COLUMNS.index("evalue")
-BITS_COL = FOLDSEEK_COLUMNS.index("bits")
+# Parameters copied verbatim from foldseek search's own GPU pipeline so the
+# sharded run reproduces it exactly: the ungapped prefilter call (captured from a
+# `--gpu 1` search) and the structurealign call (from foldseek's structuresearch.sh).
+UNGAPPED_PREFILTER_PAR = [
+    "--sub-mat", "aa:3di.out,nucl:3di.out", "-c", 0, "-e", "1.79769e+308",
+    "--cov-mode", 0, "--comp-bias-corr", 1, "--comp-bias-corr-scale", 0.15,
+    "--min-ungapped-score", 30, "--max-seqs", 1000, "--db-load-mode", 0,
+    "--gpu", 1, "-v", 3,
+]
+STRUCTUREALIGN_PAR = [
+    "--tmscore-threshold", 0, "--tmscore-threshold-mode", 0, "--lddt-threshold", 0,
+    "--sort-by-structure-bits", 1, "--alignment-type", 2, "--exact-tmscore", 0,
+    "--sub-mat", "aa:3di.out,nucl:3di.out", "-a", 0, "--alignment-mode", 3,
+    "--alignment-output-mode", 0, "--wrapped-scoring", 0, "-e", 10,
+    "--min-seq-id", 0, "--min-aln-len", 0, "--seq-id-mode", 0, "--alt-ali", 0,
+    "-c", 0, "--cov-mode", 0, "--max-seq-len", 65535, "--comp-bias-corr", 1,
+    "--comp-bias-corr-scale", 0.5, "--max-rejected", 2147483647,
+    "--max-accept", 2147483647, "--add-self-matches", 0, "--db-load-mode", 0,
+    "--score-bias", 0, "--realign", 0, "--gap-open", "aa:10,nucl:10",
+    "--gap-extend", "aa:1,nucl:1", "--zdrop", 40, "-v", 3,
+]
 
 
 def discover_shards(shards_dir: Path) -> list[Path]:
@@ -338,63 +354,53 @@ def discover_shards(shards_dir: Path) -> list[Path]:
     return prefixes
 
 
-def run_sharded_search_and_merge(args: argparse.Namespace, query_db: Path,
-                                 output_dir: Path) -> Path:
-    """Search each shard, then merge as if searched against the whole DB.
+def run_sharded_prefilter_merge(args: argparse.Namespace, query_db: Path,
+                                output_dir: Path) -> Path:
+    """Reproduce a full-DB GPU search by sharding only the prefilter.
 
-    The shards partition the target DB disjointly, so a (query, target) hit
-    appears in exactly one shard. Searching a shard scales its E-values to the
-    shard's size, so we multiply by the shard count to recover full-DB E-values,
-    drop anything above foldseek's reporting threshold, and keep the top hits per
-    query (mirroring the prefilter's --max-seqs). Writes a results file in the
-    same format the single-DB path produces, for the same downstream parsing.
+    foldseek's GPU search loads the whole padded target DB into VRAM, which a
+    small card cannot hold. Instead we run the GPU ungapped prefilter against
+    each padded shard (each fits VRAM), resolve target keys to accessions per
+    shard (createtsv), then merge into one global top-N prefilter in the full-DB
+    keyspace. We align that with structurealign against the WHOLE DB, so the
+    E-values are the true full-DB values, and convertalis. This mirrors
+    foldseek's own ungappedprefilter -> structurealign -> convert pipeline.
     """
     shards = discover_shards(args.target_shards)
-    factor = len(shards)
-    log(f"Sharded search over {factor} shards; "
-        f"E-values rescaled x{factor} to full-DB size.")
+    full_db = args.target_db
+    threads = args.threads
+    prefilter_dir = fresh_dir(output_dir / "prefilter")
+    log(f"Sharded prefilter+merge over {len(shards)} shards against {full_db}.")
 
-    # query_id -> [(bits, row_fields), ...] surviving the rescaled E-value cutoff.
-    per_query: dict[str, list[tuple[float, list[str]]]] = defaultdict(list)
-
+    tsvs: list[str] = []
     for shard in shards:
-        tag = f"_{shard.name}"
-        result_prefix = run_foldseek_search(args, query_db, output_dir, shard, tag)
-        shard_tsv = output_dir / f"results{tag}.tsv"
-        run_convertalis(args.foldseek, query_db, shard, result_prefix,
-                        shard_tsv, args.threads, extra_format=True)
+        pref = prefilter_dir / f"pref_{shard.name}"
+        log(f"GPU ungapped prefilter on shard {shard.name}")
+        run_foldseek(args.foldseek, "ungappedprefilter",
+                     f"{query_db}_ss", f"{shard}_ss", pref,
+                     *UNGAPPED_PREFILTER_PAR, "--threads", threads)
+        tsv = prefilter_dir / f"pref_{shard.name}.tsv"
+        run_foldseek(args.foldseek, "createtsv", query_db, shard, pref, tsv,
+                     "--threads", threads)
+        tsvs.append(str(tsv))
 
-        kept = 0
-        with shard_tsv.open() as handle:
-            for line in handle:
-                fields = line.rstrip("\n").split("\t")
-                if len(fields) < len(FOLDSEEK_COLUMNS):
-                    continue
-                evalue = float(fields[EVALUE_COL]) * factor
-                if evalue > SEARCH_EVALUE:
-                    continue
-                fields[EVALUE_COL] = f"{evalue:.3E}"
-                per_query[fields[0]].append((float(fields[BITS_COL]), fields))
-                kept += 1
-        log(f"Shard {shard.name}: kept {kept:,} hits with full-DB E-value "
-            f"<= {SEARCH_EVALUE:g}.")
+    pref_merged = prefilter_dir / "pref_merged"
+    log("Merging shard prefilters into the full-DB keyspace.")
+    build_merged_prefilter(str(query_db), str(full_db), str(pref_merged),
+                           args.merge_max_seqs, tsvs, log=log)
 
-        if not args.keep_tmp:
-            shard_tsv.unlink(missing_ok=True)
-            shutil.rmtree(output_dir / f"tmp_search{tag}", ignore_errors=True)
+    aln = output_dir / "aln"
+    log("structurealign against the full DB (true full-DB E-values).")
+    run_foldseek(args.foldseek, "structurealign", query_db, full_db,
+                 pref_merged, aln, *STRUCTUREALIGN_PAR, "--threads", threads)
 
-    merged_tsv = output_dir / "results.full.tsv"
-    total_hits = 0
-    log(f"Merging shard hits into {merged_tsv} "
-        f"(top {args.merge_max_seqs} per query by bit score).")
-    with merged_tsv.open("w", newline="") as out:
-        for hits in per_query.values():
-            hits.sort(key=lambda bits_row: bits_row[0], reverse=True)
-            for _, fields in hits[: args.merge_max_seqs]:
-                out.write("\t".join(fields) + "\n")
-                total_hits += 1
-    log(f"Merged {total_hits:,} hits across {len(per_query):,} queries.")
-    return merged_tsv
+    results_full = output_dir / "results.full.tsv"
+    run_convertalis(args.foldseek, query_db, full_db, aln, results_full,
+                    threads, extra_format=True)
+
+    if not args.keep_tmp:
+        shutil.rmtree(prefilter_dir, ignore_errors=True)
+    return results_full
 
 
 def load_target_genome_map(path: Path | None) -> dict[str, list[str]]:
@@ -511,7 +517,7 @@ def main() -> int:
     log(f"Built query DB: {query_db}")
 
     if args.target_shards:
-        results_full = run_sharded_search_and_merge(args, query_db, args.output_dir)
+        results_full = run_sharded_prefilter_merge(args, query_db, args.output_dir)
     else:
         result_prefix = run_foldseek_search(args, query_db, args.output_dir,
                                             args.target_db)

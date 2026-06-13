@@ -91,8 +91,9 @@ def parse_args() -> argparse.Namespace:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("input_tsv", type=Path,
                    help="TSV with target_name, rank, 3di_sequence, source_file, and query_pfam_accession or domain_accession columns.")
-    p.add_argument("target_db", type=Path,
-                   help="Foldseek target DB prefix (e.g. /path/to/merged3diDB).")
+    p.add_argument("target_db", type=Path, nargs="?", default=None,
+                   help="Foldseek target DB prefix (e.g. /path/to/merged3diDB). "
+                        "Omit when using --target-shards.")
     p.add_argument("output_dir", type=Path,
                    help="Directory to write hits.tsv, genome_counts.tsv, query_db/, etc.")
     p.add_argument("--foldseek", default=str(Path.home() / "foldseek" / "bin" / "foldseek"),
@@ -111,6 +112,16 @@ def parse_args() -> argparse.Namespace:
                         "query DB, 2: auto). Pair --split-mode 0 with --split.")
     p.add_argument("--max-seqs", type=int, default=None,
                    help="Optional cap on hits per query (passed as foldseek --max-seqs).")
+    p.add_argument("--target-shards", type=Path, default=None,
+                   help="Directory of padded shard DBs (prefixes named *_pad) that "
+                        "together partition the full target DB. Used instead of "
+                        "target_db to fit a large DB into limited GPU VRAM: each "
+                        "shard is searched separately, then results are merged as "
+                        "if searched against the whole DB (e-values rescaled by the "
+                        "shard count, then re-thresholded and capped per query).")
+    p.add_argument("--merge-max-seqs", type=int, default=1000,
+                   help="When merging shard results, keep at most this many hits "
+                        "per query (mirrors foldseek's prefilter --max-seqs).")
     p.add_argument("--target-genome-map", type=Path, default=None,
                    help="Optional TSV mapping target_id -> genome. First two columns used, header skipped.")
     p.add_argument("--test", action="store_true",
@@ -119,7 +130,10 @@ def parse_args() -> argparse.Namespace:
                    help="Keep foldseek tmp search directory.")
     p.add_argument("--progress-interval", type=int, default=1000,
                    help="Flush progress every N input/output rows. Use 0 to disable periodic progress logs.")
-    return p.parse_args()
+    args = p.parse_args()
+    if (args.target_db is None) == (args.target_shards is None):
+        p.error("provide exactly one of target_db or --target-shards.")
+    return args
 
 
 def load_queries(tsv: Path, test_mode: bool, progress_interval: int) -> list[Query]:
@@ -273,9 +287,10 @@ FOLDSEEK_COLUMNS = ["query", "target", "fident", "alnlen", "mismatch",
 
 
 def run_foldseek_search(args: argparse.Namespace, query_db: Path,
-                        output_dir: Path) -> Path:
-    result_prefix = output_dir / "result"
-    tmp_dir = fresh_dir(output_dir / "tmp_search")
+                        output_dir: Path, target_db: Path,
+                        tag: str = "") -> Path:
+    result_prefix = output_dir / f"result{tag}"
+    tmp_dir = fresh_dir(output_dir / f"tmp_search{tag}")
 
     options = [
         "--threads", args.threads,
@@ -290,7 +305,7 @@ def run_foldseek_search(args: argparse.Namespace, query_db: Path,
         options += ["--max-seqs", args.max_seqs]
 
     run_foldseek(args.foldseek, "search",
-                 query_db, args.target_db, result_prefix, tmp_dir, *options)
+                 query_db, target_db, result_prefix, tmp_dir, *options)
 
     if not Path(f"{result_prefix}.index").exists():
         sys.exit(f"ERROR: foldseek search produced no {result_prefix}.index")
@@ -307,6 +322,79 @@ def run_convertalis(foldseek: str, query_db: Path, target_db: Path,
     run_foldseek(foldseek, "convertalis",
                  query_db, target_db, result_prefix, out_tsv, *options)
     log(f"Foldseek convertalis finished: {out_tsv}")
+
+
+# foldseek search's default -e: hits with a larger E-value are not reported.
+SEARCH_EVALUE = 10.0
+EVALUE_COL = FOLDSEEK_COLUMNS.index("evalue")
+BITS_COL = FOLDSEEK_COLUMNS.index("bits")
+
+
+def discover_shards(shards_dir: Path) -> list[Path]:
+    """Padded shard DB prefixes in `shards_dir` (files named <prefix>_pad)."""
+    prefixes = sorted(p.with_suffix("") for p in shards_dir.glob("*_pad.dbtype"))
+    if not prefixes:
+        sys.exit(f"ERROR: no padded shard DBs (*_pad) found in {shards_dir}")
+    return prefixes
+
+
+def run_sharded_search_and_merge(args: argparse.Namespace, query_db: Path,
+                                 output_dir: Path) -> Path:
+    """Search each shard, then merge as if searched against the whole DB.
+
+    The shards partition the target DB disjointly, so a (query, target) hit
+    appears in exactly one shard. Searching a shard scales its E-values to the
+    shard's size, so we multiply by the shard count to recover full-DB E-values,
+    drop anything above foldseek's reporting threshold, and keep the top hits per
+    query (mirroring the prefilter's --max-seqs). Writes a results file in the
+    same format the single-DB path produces, for the same downstream parsing.
+    """
+    shards = discover_shards(args.target_shards)
+    factor = len(shards)
+    log(f"Sharded search over {factor} shards; "
+        f"E-values rescaled x{factor} to full-DB size.")
+
+    # query_id -> [(bits, row_fields), ...] surviving the rescaled E-value cutoff.
+    per_query: dict[str, list[tuple[float, list[str]]]] = defaultdict(list)
+
+    for shard in shards:
+        tag = f"_{shard.name}"
+        result_prefix = run_foldseek_search(args, output_dir, query_db, shard, tag)
+        shard_tsv = output_dir / f"results{tag}.tsv"
+        run_convertalis(args.foldseek, query_db, shard, result_prefix,
+                        shard_tsv, args.threads, extra_format=True)
+
+        kept = 0
+        with shard_tsv.open() as handle:
+            for line in handle:
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) < len(FOLDSEEK_COLUMNS):
+                    continue
+                evalue = float(fields[EVALUE_COL]) * factor
+                if evalue > SEARCH_EVALUE:
+                    continue
+                fields[EVALUE_COL] = f"{evalue:.3E}"
+                per_query[fields[0]].append((float(fields[BITS_COL]), fields))
+                kept += 1
+        log(f"Shard {shard.name}: kept {kept:,} hits with full-DB E-value "
+            f"<= {SEARCH_EVALUE:g}.")
+
+        if not args.keep_tmp:
+            shard_tsv.unlink(missing_ok=True)
+            shutil.rmtree(output_dir / f"tmp_search{tag}", ignore_errors=True)
+
+    merged_tsv = output_dir / "results.full.tsv"
+    total_hits = 0
+    log(f"Merging shard hits into {merged_tsv} "
+        f"(top {args.merge_max_seqs} per query by bit score).")
+    with merged_tsv.open("w", newline="") as out:
+        for hits in per_query.values():
+            hits.sort(key=lambda bits_row: bits_row[0], reverse=True)
+            for _, fields in hits[: args.merge_max_seqs]:
+                out.write("\t".join(fields) + "\n")
+                total_hits += 1
+    log(f"Merged {total_hits:,} hits across {len(per_query):,} queries.")
+    return merged_tsv
 
 
 def load_target_genome_map(path: Path | None) -> dict[str, list[str]]:
@@ -422,25 +510,29 @@ def main() -> int:
     query_db, _ = write_query_db(queries, args.output_dir, args.progress_interval)
     log(f"Built query DB: {query_db}")
 
-    result_prefix = run_foldseek_search(args, query_db, args.output_dir)
+    if args.target_shards:
+        results_full = run_sharded_search_and_merge(args, query_db, args.output_dir)
+    else:
+        result_prefix = run_foldseek_search(args, query_db, args.output_dir,
+                                            args.target_db)
 
-    # Two convertalis flavours run in parallel: default columns and a richer
-    # format we actually parse. Both use foldseek's own thread pool, so we keep
-    # this to two workers to avoid oversubscribing the GPU/CPU.
-    results_default = args.output_dir / "results.tsv"
-    results_full = args.output_dir / "results.full.tsv"
+        # Two convertalis flavours run in parallel: default columns and a richer
+        # format we actually parse. Both use foldseek's own thread pool, so we keep
+        # this to two workers to avoid oversubscribing the GPU/CPU.
+        results_default = args.output_dir / "results.tsv"
+        results_full = args.output_dir / "results.full.tsv"
 
-    log("Starting Foldseek convertalis jobs.")
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [
-            pool.submit(run_convertalis, args.foldseek, query_db, args.target_db,
-                        result_prefix, results_default, args.threads, False),
-            pool.submit(run_convertalis, args.foldseek, query_db, args.target_db,
-                        result_prefix, results_full, args.threads, True),
-        ]
-        for f in futures:
-            f.result()
-    log("Finished Foldseek convertalis jobs.")
+        log("Starting Foldseek convertalis jobs.")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(run_convertalis, args.foldseek, query_db, args.target_db,
+                            result_prefix, results_default, args.threads, False),
+                pool.submit(run_convertalis, args.foldseek, query_db, args.target_db,
+                            result_prefix, results_full, args.threads, True),
+            ]
+            for f in futures:
+                f.result()
+        log("Finished Foldseek convertalis jobs.")
 
     target_map = load_target_genome_map(args.target_genome_map)
     write_hits_and_counts(results_full, queries, target_map, args.output_dir,

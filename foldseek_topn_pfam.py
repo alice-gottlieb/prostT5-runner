@@ -161,7 +161,7 @@ def load_queries(tsv: Path, test_mode: bool, progress_interval: int) -> list[Que
             target = row["target_name"]
             rank = row["rank"]
             source_file = row["source_file"]
-            query_genome = target_to_genome(source_file, {})
+            query_genome = parse_genome(source_file)
             qid = re.sub(
                 r"\s+",
                 "_",
@@ -297,27 +297,39 @@ def run_convertalis(foldseek: str, query_db: Path, target_db: Path,
     log(f"Foldseek convertalis finished: {out_tsv}")
 
 
-def load_target_genome_map(path: Path | None) -> dict[str, str]:
+def load_target_genome_map(path: Path | None) -> dict[str, list[str]]:
+    """Load a target_id -> [genome, ...] map (one row per target/genome pair).
+
+    A single target (e.g. an NCBI WP_ multispecies protein) can live in many
+    genomes, so each target maps to a list of genomes rather than just one. A
+    hit on that target then counts toward every genome it appears in.
+    """
     if path is None:
         log("No target genome map provided; parsing genomes from target IDs.")
         return {}
-    mapping: dict[str, str] = {}
+    mapping: dict[str, list[str]] = defaultdict(list)
     log(f"Loading target genome map: {path}")
     with path.open() as handle:
         reader = csv.reader(handle, delimiter="\t")
         next(reader, None)  # header
         for row in reader:
             if len(row) >= 2 and row[0]:
-                mapping[row[0]] = row[1]
-    log(f"Loaded {len(mapping):,} target genome mappings.")
-    return mapping
+                mapping[row[0]].append(row[1])
+    log(f"Loaded genome mappings for {len(mapping):,} targets.")
+    return dict(mapping)
 
 
-def target_to_genome(target: str, mapping: dict[str, str]) -> str:
+def parse_genome(text: str) -> str:
+    """Pull a single genome accession (GCF_/GCA_) out of a string, or 'NA'."""
+    m = GENOME_RE.search(text)
+    return m.group(1) if m else "NA"
+
+
+def genomes_for_target(target: str, mapping: dict[str, list[str]]) -> list[str]:
+    """Every genome a target belongs to: from the map, else parsed from the id."""
     if target in mapping:
         return mapping[target]
-    m = GENOME_RE.search(target)
-    return m.group(1) if m else "NA"
+    return [parse_genome(target)]
 
 
 def write_hits_and_counts(results_tsv: Path, queries: list[Query],
@@ -345,17 +357,19 @@ def write_hits_and_counts(results_tsv: Path, queries: list[Query],
             if len(parts) < len(FOLDSEEK_COLUMNS):
                 continue
             query_id, target = parts[0], parts[1]
-            genome = target_to_genome(target, target_map)
+            genomes = genomes_for_target(target, target_map)
             q = query_meta.get(query_id)
             writer.writerow(parts + [
-                genome,
+                ";".join(genomes),
                 q.pfam_accession if q else "NA",
                 q.query_genome if q else "NA",
                 q.target_name if q else "NA",
                 q.rank if q else "NA",
                 q.source_file if q else "NA",
             ])
-            counts[genome][query_id] += 1
+            # A multispecies target lives in many genomes; count the hit in each.
+            for genome in genomes:
+                counts[genome][query_id] += 1
             hits_seen += 1
 
             if progress_interval and hits_seen % progress_interval == 0:

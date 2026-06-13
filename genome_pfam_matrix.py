@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
-"""Build a genome x pfam hit-count matrix from foldseek_topn_pfam.py's hits.tsv.
+"""Build a pfam x genome hit-count matrix from foldseek_topn_pfam.py's hits.tsv.
 
-Each cell [genome, pfam] is the number of foldseek hits attributed to that
-genome for that Pfam domain. The genome and Pfam both live in the `query`
-column (col 1), which foldseek_topn_pfam.py builds as:
+Each cell [pfam, genome] is the number of foldseek hits for that Pfam domain
+that landed in that *target* genome — i.e. how widely each Pfam's 3Di code is
+found across the searched genomes. Genomes are the columns so each row is one
+Pfam's profile across all genomes.
 
-    {pfam}|{genome}|{target}|rank{rank}
+hits.tsv carries two ready-made columns we use directly:
+  - `target_genome`:  the genome(s) the hit target belongs to. A multispecies
+    target lives in several genomes, so foldseek_topn_pfam.py writes them
+    ";"-joined; we split and count the hit toward each one.
+  - `pfam_accession`: the Pfam the query came from.
 
-so we split on "|" and take the Pfam (field 0) and genome (field 1).
+(Earlier this script parsed the genome out of the `query` column, which is the
+query's *source* genome, not the target genome it matched — collapsing every
+hit onto the one genome the query came from.)
 
 Pipeline:
-  1. Read hits.tsv and parse genome + pfam out of the query column.
-  2. Intermediate long table: group by genome, then by pfam, and count the hits
-     in each (genome, pfam) group.
-  3. Pivot that long table into a wide matrix: rows = genome, cols = pfam,
+  1. Read hits.tsv; take pfam_accession + target_genome, split/explode the
+     ";"-joined target genomes, and drop unmapped ("NA") genomes.
+  2. Intermediate long table: group by pfam, then by genome, and count the hits
+     in each (pfam, genome) group.
+  3. Pivot that long table into a wide matrix: rows = pfam, cols = genome,
      values = hit count (missing combinations filled with 0).
 
 Usage:
@@ -28,51 +36,57 @@ from pathlib import Path
 
 import polars as pl
 
-QUERY_COL = "query"
+TARGET_GENOME_COL = "target_genome"
+PFAM_ACCESSION_COL = "pfam_accession"
 GENOME_COL = "genome"
 PFAM_COL = "pfam"
 
 
 def load_hits(path: Path) -> pl.DataFrame:
-    """Read hits.tsv and parse genome + pfam out of the query column.
+    """Read hits.tsv and pull the Pfam + target genome(s) for each hit.
 
-    The query column looks like "{pfam}|{genome}|{target}|rank{rank}", so the
-    Pfam is pipe-field 0 and the genome is pipe-field 1.
+    `target_genome` may list several ";"-joined genomes for one multispecies
+    target, so we split and explode into one row per (pfam, genome). Unmapped
+    targets ("NA") are dropped.
     """
-    fields = pl.col(QUERY_COL).str.split("|")
-    return pl.read_csv(path, separator="\t").select(
-        fields.list.get(1).alias(GENOME_COL),
-        fields.list.get(0).alias(PFAM_COL),
+    return (
+        pl.read_csv(path, separator="\t")
+        .select(
+            pl.col(TARGET_GENOME_COL).str.split(";").alias(GENOME_COL),
+            pl.col(PFAM_ACCESSION_COL).alias(PFAM_COL),
+        )
+        .explode(GENOME_COL)
+        .filter(pl.col(GENOME_COL) != "NA")
     )
 
 
-def count_by_genome_and_pfam(hits: pl.DataFrame) -> pl.DataFrame:
-    """Intermediate: long table grouped by genome, then by pfam, with hit counts.
+def count_by_pfam_and_genome(hits: pl.DataFrame) -> pl.DataFrame:
+    """Intermediate: long table grouped by pfam, then by genome, with hit counts.
 
-    One row per (genome, pfam) combination that actually occurs.
+    One row per (pfam, genome) combination that actually occurs.
     """
     return (
-        hits.group_by([GENOME_COL, PFAM_COL])
+        hits.group_by([PFAM_COL, GENOME_COL])
         .agg(pl.len().alias("hits"))
-        .sort([GENOME_COL, PFAM_COL])
+        .sort([PFAM_COL, GENOME_COL])
     )
 
 
 def pivot_to_matrix(long: pl.DataFrame) -> pl.DataFrame:
-    """Wide matrix: rows = genome, cols = pfam, values = hit count (0-filled)."""
-    matrix = long.pivot(values="hits", index=GENOME_COL, on=PFAM_COL)
-    pfam_cols = sorted(c for c in matrix.columns if c != GENOME_COL)
+    """Wide matrix: rows = pfam, cols = genome, values = hit count (0-filled)."""
+    matrix = long.pivot(values="hits", index=PFAM_COL, on=GENOME_COL)
+    genome_cols = sorted(c for c in matrix.columns if c != PFAM_COL)
     return (
-        matrix.select([GENOME_COL, *pfam_cols])
-        .with_columns(pl.col(pfam_cols).fill_null(0))
-        .sort(GENOME_COL)
+        matrix.select([PFAM_COL, *genome_cols])
+        .with_columns(pl.col(genome_cols).fill_null(0))
+        .sort(PFAM_COL)
     )
 
 
 def build_matrix(hits_tsv: Path) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Return (intermediate long table, final wide matrix) for a hits.tsv."""
     hits = load_hits(hits_tsv)
-    long = count_by_genome_and_pfam(hits)
+    long = count_by_pfam_and_genome(hits)
     matrix = pivot_to_matrix(long)
     return long, matrix
 
@@ -95,10 +109,10 @@ def main() -> int:
 
     # Observe both tables as we go.
     with pl.Config(tbl_rows=20, tbl_cols=20):
-        print("Intermediate: grouped by genome, then by pfam (long form):")
+        print("Intermediate: grouped by pfam, then by genome (long form):")
         print(long)
-        print(f"\nFinal: genome x pfam hit-count matrix "
-              f"({matrix.height} genomes x {len(matrix.columns) - 1} pfams):")
+        print(f"\nFinal: pfam x genome hit-count matrix "
+              f"({matrix.height} pfams x {len(matrix.columns) - 1} genomes):")
         print(matrix)
 
     matrix.write_csv(output, separator="\t")

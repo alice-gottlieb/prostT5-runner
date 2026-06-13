@@ -101,6 +101,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gpu", type=int, default=1, choices=(0, 1),
                    help="Pass --gpu to foldseek search (1 = GPU, default).")
     p.add_argument("--split-memory-limit", default="40G")
+    p.add_argument("--split", type=int, default=None,
+                   help="Split the target DB into N chunks (foldseek --split). "
+                        "Use with --split-mode 0 to fit a large target DB into "
+                        "limited GPU VRAM; foldseek corrects e-values to the full "
+                        "DB size, so results match an unsplit search.")
+    p.add_argument("--split-mode", type=int, default=None, choices=(0, 1, 2),
+                   help="foldseek --split-mode (0: split target DB, 1: split "
+                        "query DB, 2: auto). Pair --split-mode 0 with --split.")
     p.add_argument("--max-seqs", type=int, default=None,
                    help="Optional cap on hits per query (passed as foldseek --max-seqs).")
     p.add_argument("--target-genome-map", type=Path, default=None,
@@ -274,6 +282,10 @@ def run_foldseek_search(args: argparse.Namespace, query_db: Path,
         "--gpu", args.gpu,
         "--split-memory-limit", args.split_memory_limit,
     ]
+    if args.split is not None:
+        options += ["--split", args.split]
+    if args.split_mode is not None:
+        options += ["--split-mode", args.split_mode]
     if args.max_seqs is not None:
         options += ["--max-seqs", args.max_seqs]
 

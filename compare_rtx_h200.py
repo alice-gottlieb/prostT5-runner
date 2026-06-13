@@ -58,9 +58,10 @@ def compare_counts(ref: Path, test: Path) -> None:
     r = load_counts(ref / "genome_counts.tsv")
     t = load_counts(test / "genome_counts.tsv")
 
-    # Full outer join on (genome, query); missing cells are 0.
+    # Full outer join on (genome, query); missing cells are 0. coalesce keeps the
+    # genome/query keys in one column each so one-sided cells stay readable.
     joined = (
-        r.join(t, on=["genome", "query"], how="full", suffix="_test")
+        r.join(t, on=["genome", "query"], how="full", suffix="_test", coalesce=True)
         .with_columns(
             pl.col("count").fill_null(0),
             pl.col("count_test").fill_null(0),

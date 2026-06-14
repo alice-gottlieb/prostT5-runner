@@ -6,7 +6,8 @@
 # used, searched against the 6 disjoint padded shards on an RTX2080Ti (10G VRAM)
 # and merged back to full-DB semantics. Must reproduce the H200 output and stay
 # within VRAM (the whole 29G DB does not fit; each ~5G shard does).
-#$ -l gpu,RTX2080Ti,cuda=1,h_rt=8:00:00,h_data=48G
+#$ -l gpu,RTX2080Ti,cuda=1,h_rt=12:00:00,h_data=9G
+#$ -pe shared 8
 #$ -M $USER@ucla.edu
 #$ -m bea
 

@@ -39,7 +39,7 @@ THREADS=8
 TASK_PAD=$(printf "%02d" "$SGE_TASK_ID")
 CHUNK="$CHUNKS_DIR/pfam_chunk_${TASK_PAD}.tsv"
 TASK_OUTPUT="$OUTPUT_BASE/chunk_${TASK_PAD}"
-mkdir -p "$TASK_OUTPUT" "$(dirname "$SGE_O_WORKDIR")/logs" 2>/dev/null || true
+mkdir -p "$TASK_OUTPUT"
 
 if [[ ! -f "$CHUNK" ]]; then
     echo "ERROR: chunk file not found: $CHUNK" >&2

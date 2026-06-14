@@ -21,7 +21,8 @@ hostname
 nvidia-smi --query-gpu=name --format=csv,noheader
 
 # onnxruntime (CPU) for the graph-isolation check (install loudly so we see why
-# if it fails).
+# if it fails). uv isn't on the batch PATH by default.
+export PATH="$HOME/.local/bin:$PATH"
 uv pip install --python "$WORK/venv/bin/python" --only-binary :all: "onnxruntime==1.20.1"
 python -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)"
 

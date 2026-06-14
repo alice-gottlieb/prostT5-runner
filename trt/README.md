@@ -43,14 +43,17 @@ is correct and the issue was purely FP16 numerics.
 
 | GPU        | Precision | Agreement | Speedup vs PyTorch FP16 |
 | ---------- | --------- | --------- | ----------------------- |
+| RTX2080Ti  | FP16      | 99.86%    | 1.91×                   |
 | A100-40GB  | FP16      | 99.80%    | 2.04×                   |
 | A100-40GB  | INT8+BF16 | 99.13%    | 1.90×                   |
 | H200       | FP16      | 99.80%    | 1.66×                   |
 | H200       | INT8+BF16 | 99.03%    | 2.39×                   |
-| RTX2080Ti  | FP16      | (pending) | —                       |
 
-Remaining ~0.2–1% are near-decision-boundary residues flipping under reduced
-precision. INT8 is built only on A100/H200 (BF16 fallback needs Ampere+).
+Remaining ~0.1–1% are near-decision-boundary residues flipping under reduced
+precision. INT8 is built only on A100/H200 (the BF16 fallback needs Ampere+;
+Turing's RTX2080Ti gets FP16). Speedups are batch-1 vs PyTorch FP16 on the same
+GPU; absolute latency is much lower on H200 (≈7 ms/seq) than RTX2080Ti
+(≈39 ms/seq).
 
 ## Run it on Hoffman
 

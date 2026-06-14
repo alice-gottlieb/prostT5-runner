@@ -24,7 +24,7 @@ import tensorrt as trt
 
 def build(onnx_path, engine_path, min_len, opt_len, max_len, fp16, workspace_gb,
           int8=False, calib_fasta=None, cache_dir=None, calib_cache=None,
-          strongly_typed=False):
+          strongly_typed=False, bf16=False):
     logger = trt.Logger(trt.Logger.INFO)
     builder = trt.Builder(logger)
     # A strongly-typed network obeys the dtypes encoded in the ONNX exactly. We
@@ -49,11 +49,17 @@ def build(onnx_path, engine_path, min_len, opt_len, max_len, fp16, workspace_gb,
     )
     if strongly_typed:
         print("Strongly-typed network: precision follows the ONNX dtypes")
-    elif fp16:
-        if not builder.platform_has_fast_fp16:
-            print("WARNING: platform reports no fast FP16; building FP16 anyway")
-        config.set_flag(trt.BuilderFlag.FP16)
-        print("FP16 enabled")
+    else:
+        if bf16:
+            # BF16 has FP32's exponent range, so T5's RMSNorm doesn't overflow
+            # (unlike FP16). Use it as the high-precision fallback for INT8.
+            config.set_flag(trt.BuilderFlag.BF16)
+            print("BF16 enabled")
+        if fp16:
+            if not builder.platform_has_fast_fp16:
+                print("WARNING: platform reports no fast FP16; building FP16 anyway")
+            config.set_flag(trt.BuilderFlag.FP16)
+            print("FP16 enabled")
 
     # Batch-1, dynamic length optimization profile.
     profile = builder.create_optimization_profile()
@@ -67,8 +73,8 @@ def build(onnx_path, engine_path, min_len, opt_len, max_len, fp16, workspace_gb,
         from int8_calibrator import ProstT5Int8Calibrator
 
         config.set_flag(trt.BuilderFlag.INT8)
-        # FP16 stays on too, so TensorRT can keep precision-sensitive layers in
-        # FP16 and only drop robust layers to INT8.
+        # Pair INT8 with BF16 (not FP16) as the high-precision fallback so the
+        # T5 RMSNorm stays stable while matmuls run in INT8.
         # Calibration runs at a single fixed shape (the calib profile's opt dims).
         calib_profile = builder.create_optimization_profile()
         for name in ("input_ids", "attention_mask"):
@@ -102,6 +108,8 @@ def main():
     ap.add_argument("--opt-len", type=int, default=384)
     ap.add_argument("--max-len", type=int, default=2048)
     ap.add_argument("--fp16", action="store_true")
+    ap.add_argument("--bf16", action="store_true",
+                    help="Enable BF16 (Ampere+; stable high-precision fallback for INT8)")
     ap.add_argument("--strongly-typed", action="store_true",
                     help="Obey the ONNX dtypes (use with an FP16-exported ONNX)")
     ap.add_argument("--int8", action="store_true",
@@ -122,6 +130,7 @@ def main():
         args.fp16, args.workspace_gb,
         int8=args.int8, calib_fasta=args.calib_fasta, cache_dir=args.cache_dir,
         calib_cache=args.calib_cache, strongly_typed=args.strongly_typed,
+        bf16=args.bf16,
     )
 
 

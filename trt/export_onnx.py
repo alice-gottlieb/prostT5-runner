@@ -30,15 +30,24 @@ def main():
     ap.add_argument("--cache-dir", default=None, help="HuggingFace cache dir")
     ap.add_argument("--out", required=True, help="Output .onnx path")
     ap.add_argument("--opset", type=int, default=17)
+    ap.add_argument("--fp16", action="store_true",
+                    help="Export an FP16 model on GPU. T5LayerNorm keeps its "
+                         "variance in FP32, so a strongly-typed engine built "
+                         "from this ONNX is numerically stable (unlike a plain "
+                         "FP16 build of the FP32 ONNX, where RMSNorm overflows).")
     args = ap.parse_args()
 
-    print("Loading FP32 reference model (CPU)...")
+    device = "cuda" if args.fp16 else "cpu"
+    print(f"Loading {'FP16' if args.fp16 else 'FP32'} model on {device}...")
     model = load_model(args.cnn_ckpt, cache_dir=args.cache_dir)
+    if args.fp16:
+        model = model.half()
+    model = model.to(device)
     tokenizer = load_tokenizer(args.cache_dir)
 
     # A real short sequence gives the exporter representative shapes.
     sample = "MVLSPADKTNVKAAWGKVGAHAGEYGAEALERMFLSFPTTKTYFPHF"
-    input_ids, attention_mask, _ = tokenize_one(tokenizer, sample, device="cpu")
+    input_ids, attention_mask, _ = tokenize_one(tokenizer, sample, device=device)
     print(f"Tracing with sample shape {tuple(input_ids.shape)}")
 
     dynamic_axes = {

@@ -23,11 +23,16 @@ import tensorrt as trt
 
 
 def build(onnx_path, engine_path, min_len, opt_len, max_len, fp16, workspace_gb,
-          int8=False, calib_fasta=None, cache_dir=None, calib_cache=None):
+          int8=False, calib_fasta=None, cache_dir=None, calib_cache=None,
+          strongly_typed=False):
     logger = trt.Logger(trt.Logger.INFO)
     builder = trt.Builder(logger)
-    # TensorRT 10: networks are strongly-typed/explicit-batch by default (flag 0).
-    network = builder.create_network(0)
+    # A strongly-typed network obeys the dtypes encoded in the ONNX exactly. We
+    # use it for the FP16 ONNX so T5LayerNorm's FP32 variance is preserved
+    # (precision flags are then ignored / not allowed).
+    flags = (1 << int(trt.NetworkDefinitionCreationFlag.STRONGLY_TYPED)
+             if strongly_typed else 0)
+    network = builder.create_network(flags)
     parser = trt.OnnxParser(network, logger)
 
     print(f"Parsing ONNX: {onnx_path}")
@@ -42,7 +47,9 @@ def build(onnx_path, engine_path, min_len, opt_len, max_len, fp16, workspace_gb,
     config.set_memory_pool_limit(
         trt.MemoryPoolType.WORKSPACE, int(workspace_gb * (1 << 30))
     )
-    if fp16:
+    if strongly_typed:
+        print("Strongly-typed network: precision follows the ONNX dtypes")
+    elif fp16:
         if not builder.platform_has_fast_fp16:
             print("WARNING: platform reports no fast FP16; building FP16 anyway")
         config.set_flag(trt.BuilderFlag.FP16)
@@ -55,6 +62,8 @@ def build(onnx_path, engine_path, min_len, opt_len, max_len, fp16, workspace_gb,
     config.add_optimization_profile(profile)
 
     if int8:
+        if strongly_typed:
+            raise ValueError("INT8 calibration is incompatible with --strongly-typed")
         from int8_calibrator import ProstT5Int8Calibrator
 
         config.set_flag(trt.BuilderFlag.INT8)
@@ -93,6 +102,8 @@ def main():
     ap.add_argument("--opt-len", type=int, default=384)
     ap.add_argument("--max-len", type=int, default=2048)
     ap.add_argument("--fp16", action="store_true")
+    ap.add_argument("--strongly-typed", action="store_true",
+                    help="Obey the ONNX dtypes (use with an FP16-exported ONNX)")
     ap.add_argument("--int8", action="store_true",
                     help="Build an INT8 engine (requires --calib-fasta)")
     ap.add_argument("--calib-fasta", default=None, help="FASTA for INT8 calibration")
@@ -110,7 +121,7 @@ def main():
         args.onnx, args.engine, args.min_len, args.opt_len, args.max_len,
         args.fp16, args.workspace_gb,
         int8=args.int8, calib_fasta=args.calib_fasta, cache_dir=args.cache_dir,
-        calib_cache=args.calib_cache,
+        calib_cache=args.calib_cache, strongly_typed=args.strongly_typed,
     )
 
 

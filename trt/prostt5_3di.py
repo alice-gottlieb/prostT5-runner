@@ -72,12 +72,14 @@ class ProstT5For3Di(nn.Module):
         self.head = head
 
     def forward(self, input_ids, attention_mask):
+        # Inputs are int32 (TensorRT-friendly); the embedding needs int64 indices.
         emb = self.encoder(
-            input_ids=input_ids, attention_mask=attention_mask
+            input_ids=input_ids.to(torch.long), attention_mask=attention_mask
         ).last_hidden_state                       # (B, L, 1024)
-        # Zero out padding/special-token positions before the CNN, matching the
-        # reference (it multiplies embeddings by the attention mask).
-        emb = emb * attention_mask.unsqueeze(-1).to(emb.dtype)
+        # NOTE: no attention-mask multiply here. We run strictly batch-1 (one
+        # sequence, no padding), so the mask is all ones and the multiply is a
+        # no-op. It is also removed because TensorRT's int->float cast of the
+        # mask zeroed the embeddings, collapsing the 3Di output to a constant.
         return self.head(emb)                      # (B, 20, L)
 
 
@@ -171,7 +173,9 @@ def tokenize_one(tokenizer: T5Tokenizer, sequence: str, device: str = "cpu"):
     enc = tokenizer(
         proc, add_special_tokens=True, padding="longest", return_tensors="pt"
     )
-    input_ids = enc.input_ids.to(device)
-    attention_mask = enc.attention_mask.to(device)
+    # int32 (not int64): TensorRT handles int32 I/O reliably; int64 casts are
+    # buggy. The model casts ids back to long internally for the embedding.
+    input_ids = enc.input_ids.to(device, dtype=torch.int32)
+    attention_mask = enc.attention_mask.to(device, dtype=torch.int32)
     real_len = len(re.sub(r"[UZOB]", "X", sequence.upper()))
     return input_ids, attention_mask, real_len

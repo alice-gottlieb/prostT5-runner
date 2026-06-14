@@ -54,11 +54,12 @@ class ProstT5Int8Calibrator(trt.IInt8EntropyCalibrator2):
             mask = enc["attention_mask"][0]
             ids = self._fit(ids, opt_len, pad_id)
             mask = self._fit(mask, opt_len, 0)
-            self.samples.append((ids.astype(np.int64), mask.astype(np.int64)))
+            # int32 to match the engine's int32 inputs.
+            self.samples.append((ids.astype(np.int32), mask.astype(np.int32)))
 
         # Persistent GPU buffers (stable device pointers for TensorRT).
-        self.d_ids = torch.zeros(1, opt_len, dtype=torch.int64, device="cuda")
-        self.d_mask = torch.zeros(1, opt_len, dtype=torch.int64, device="cuda")
+        self.d_ids = torch.zeros(1, opt_len, dtype=torch.int32, device="cuda")
+        self.d_mask = torch.zeros(1, opt_len, dtype=torch.int32, device="cuda")
         self.idx = 0
 
     @staticmethod

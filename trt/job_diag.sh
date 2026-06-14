@@ -20,9 +20,10 @@ cd "$HOME/prostT5-runner/trt"
 hostname
 nvidia-smi --query-gpu=name --format=csv,noheader
 
-# onnxruntime (CPU) for the graph-isolation check.
-uv pip install --python "$WORK/venv/bin/python" --only-binary :all: onnxruntime >/dev/null 2>&1 || \
-    pip install onnxruntime >/dev/null 2>&1 || true
+# onnxruntime (CPU) for the graph-isolation check (install loudly so we see why
+# if it fails).
+uv pip install --python "$WORK/venv/bin/python" --only-binary :all: "onnxruntime==1.20.1"
+python -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)"
 
 python diag_compare.py \
     --engine "$WORK/engines/prostt5_3di.A100.fp16.engine" \

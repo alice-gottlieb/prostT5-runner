@@ -83,5 +83,13 @@ write("$WORK/test_seqs.fasta", recs[:30])
 write("$WORK/calib_seqs.fasta", recs[30:30+256])
 PY
 
+# Export the (architecture-independent) ONNX here on CPU so the per-arch GPU
+# build jobs are fully independent and can run in parallel.
+echo "=== Exporting ONNX (CPU) ==="
+python export_onnx.py \
+    --cnn-ckpt "$WORK/cnn_head.pt" \
+    --cache-dir "$HF_HOME" \
+    --out "$WORK/prostt5_3di.onnx"
+
 echo "=== DONE bootstrap ==="
 ls -la "$WORK"

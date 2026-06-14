@@ -119,18 +119,29 @@ def main():
     print(f"Validating on {len(seqs)} sequences (lengths "
           f"{min(len(v) for v in seqs.values())}-{max(len(v) for v in seqs.values())})")
 
+    import gc
+
+    tokenizer = load_tokenizer(args.cache_dir)
+
+    # ---- reference 3Di (FP32) ----
+    # Compute and cache all references first, then FREE the FP32 model before the
+    # engine is loaded. On the 10GB RTX2080Ti, FP32 model (~4.8GB) and the engine
+    # (~2.4GB) cannot coexist, so they must not be resident at the same time.
     print("Loading FP32 reference model...")
     model = load_model(args.cnn_ckpt, cache_dir=args.cache_dir).to("cuda").eval()
-    tokenizer = load_tokenizer(args.cache_dir)
+    refs = {name: reference_3di(model, tokenizer, seq) for name, seq in seqs.items()}
+    del model
+    gc.collect()
+    torch.cuda.empty_cache()
 
     print("Loading TensorRT engine...")
     engine = ProstT5Engine(args.engine)
 
     # ---- correctness ----
     total_same, total_res, exact = 0, 0, 0
-    print("\nPer-sequence 3Di agreement (TRT-FP16 vs PyTorch-FP32):")
+    print("\nPer-sequence 3Di agreement (TRT vs PyTorch-FP32):")
     for name, seq in seqs.items():
-        ref = reference_3di(model, tokenizer, seq)
+        ref = refs[name]
         trt_out = engine_3di(engine, tokenizer, seq)
         frac, n = agreement(ref, trt_out)
         total_same += int(frac * n)
@@ -145,15 +156,7 @@ def main():
     print(f"Exact-match sequences: {exact}/{len(seqs)}")
 
     # ---- benchmark ----
-    # Free the FP32 reference before loading the FP16 copy so peak VRAM stays
-    # low enough for the 10GB RTX2080Ti (FP32 model + engine + FP16 model would
-    # otherwise overflow).
-    import gc
-
-    del model
-    gc.collect()
-    torch.cuda.empty_cache()
-
+    # FP16 model (~2.4GB) + engine (~2.4GB) fit alongside each other on 10GB.
     print("\nBenchmarking...")
     model_fp16 = load_model(args.cnn_ckpt, cache_dir=args.cache_dir).half().to("cuda").eval()
 

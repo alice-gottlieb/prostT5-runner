@@ -56,11 +56,15 @@ if [ "$DO_EXPORT" = "1" ] || [ ! -f "$ONNX_FP16" ]; then
         --out "$ONNX_FP16"
 fi
 
-echo "=== Building strongly-typed FP16 engine for $GPU_LABEL ==="
-python build_engine.py \
-    --onnx "$ONNX_FP16" --engine "$ENGINE" --strongly-typed \
-    --min-len 16 --opt-len 384 --max-len "$MAX_LEN" \
-    --workspace-gb "$WORKSPACE_GB"
+if [ "${SKIP_BUILD:-0}" = "1" ] && [ -f "$ENGINE" ]; then
+    echo "=== SKIP_BUILD: reusing existing engine $ENGINE ==="
+else
+    echo "=== Building strongly-typed FP16 engine for $GPU_LABEL ==="
+    python build_engine.py \
+        --onnx "$ONNX_FP16" --engine "$ENGINE" --strongly-typed \
+        --min-len 16 --opt-len 384 --max-len "$MAX_LEN" \
+        --workspace-gb "$WORKSPACE_GB"
+fi
 
 echo "=== Validating + benchmarking FP16 ($GPU_LABEL) ==="
 python validate_and_bench.py \

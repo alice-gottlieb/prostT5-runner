@@ -20,14 +20,24 @@ cd "$HOME/prostT5-runner/trt"
 hostname
 nvidia-smi --query-gpu=name --format=csv,noheader
 
-# onnxruntime (CPU) for the graph-isolation check (install loudly so we see why
-# if it fails). uv isn't on the batch PATH by default.
-export PATH="$HOME/.local/bin:$PATH"
-# onnxruntime <=1.18 still ships manylinux_2_17 wheels (the el7 nodes are glibc
-# 2.17); newer versions need glibc 2.28.
-uv pip install --python "$WORK/venv/bin/python" --only-binary :all: "onnxruntime==1.18.1"
-python -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)"
+# Build an FP32 engine to isolate "ONNX graph broken" from "FP16 precision".
+# (onnxruntime has no cp312/glibc-2.17 wheel on these el7 nodes, so we use the
+# TRT stack itself as the oracle.)
+FP32_ENGINE="$WORK/engines/diag_fp32.engine"
+echo "=== Building FP32 diagnostic engine ==="
+python build_engine.py \
+    --onnx "$WORK/prostt5_3di.onnx" \
+    --engine "$FP32_ENGINE" \
+    --min-len 16 --opt-len 256 --max-len 512 --workspace-gb 8
 
+echo "=== diag: PyTorch FP32 vs FP32-engine vs FP16-engine ==="
+echo "--- against FP32 engine ---"
+python diag_compare.py \
+    --engine "$FP32_ENGINE" \
+    --onnx "$WORK/prostt5_3di.onnx" \
+    --cnn-ckpt "$WORK/cnn_head.pt" \
+    --cache-dir "$HF_HOME"
+echo "--- against FP16 engine ---"
 python diag_compare.py \
     --engine "$WORK/engines/prostt5_3di.A100.fp16.engine" \
     --onnx "$WORK/prostt5_3di.onnx" \

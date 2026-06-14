@@ -148,12 +148,17 @@ def preprocess_sequences(sequences: list[str]) -> list[str]:
 
 
 def logits_to_3di(logits: torch.Tensor, real_len: int) -> str:
-    """Argmax a (20, L) or (1, 20, L) logits tensor and map the first
-    `real_len` positions to a 3Di string."""
+    """Argmax a (20, L) or (1, 20, L) logits tensor and map the per-residue
+    positions to a 3Di string.
+
+    The tokenized input is [<AA2fold>, res_1, ..., res_n, </s>], so residue
+    predictions live at positions 1 .. real_len (position 0 is the direction
+    prefix token, which must be skipped).
+    """
     if logits.dim() == 3:
         logits = logits[0]
     preds = logits.argmax(dim=0).tolist()       # length L
-    return "".join(SS_MAPPING[p] for p in preds[:real_len])
+    return "".join(SS_MAPPING[p] for p in preds[1:1 + real_len])
 
 
 def tokenize_one(tokenizer: T5Tokenizer, sequence: str, device: str = "cpu"):

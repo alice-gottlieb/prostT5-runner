@@ -32,14 +32,16 @@ ONNX="$WORK/prostt5_3di.onnx"
 # Keep an audit copy of this script alongside the outputs.
 cp "$REPO/trt/job_build_validate.sh" "$WORK/job_build_validate.${GPU_LABEL}.sh"
 
-module load cuda/12.3
+# No `module load cuda` needed: the torch + tensorrt-cu12 wheels bundle their own
+# CUDA runtime libs; the node driver provides libcuda. (`module` isn't even
+# initialised in the batch shell.)
 source "$WORK/venv/bin/activate"
 cd "$REPO/trt"
 
 echo "=== Node / GPU ==="
 hostname
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
-python -c "import tensorrt as trt; print('TensorRT', trt.__version__)"
+python -c "import torch, tensorrt as trt; print('torch', torch.__version__, '| TensorRT', trt.__version__, '| CUDA avail', torch.cuda.is_available())"
 
 if [ "$DO_EXPORT" = "1" ] || [ ! -f "$ONNX" ]; then
     echo "=== Exporting ONNX ==="

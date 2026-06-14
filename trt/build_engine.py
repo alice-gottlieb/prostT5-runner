@@ -31,11 +31,12 @@ def build(onnx_path, engine_path, min_len, opt_len, max_len, fp16, workspace_gb,
     parser = trt.OnnxParser(network, logger)
 
     print(f"Parsing ONNX: {onnx_path}")
-    with open(onnx_path, "rb") as f:
-        if not parser.parse(f.read()):
-            for i in range(parser.num_errors):
-                print("  ONNX parse error:", parser.get_error(i))
-            raise RuntimeError("Failed to parse ONNX")
+    # parse_from_file (not parse(bytes)) so TensorRT resolves the external-data
+    # weight files that sit next to the graph (the model is >2GB).
+    if not parser.parse_from_file(onnx_path):
+        for i in range(parser.num_errors):
+            print("  ONNX parse error:", parser.get_error(i))
+        raise RuntimeError("Failed to parse ONNX")
 
     config = builder.create_builder_config()
     config.set_memory_pool_limit(

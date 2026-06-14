@@ -145,6 +145,15 @@ def main():
     print(f"Exact-match sequences: {exact}/{len(seqs)}")
 
     # ---- benchmark ----
+    # Free the FP32 reference before loading the FP16 copy so peak VRAM stays
+    # low enough for the 10GB RTX2080Ti (FP32 model + engine + FP16 model would
+    # otherwise overflow).
+    import gc
+
+    del model
+    gc.collect()
+    torch.cuda.empty_cache()
+
     print("\nBenchmarking...")
     model_fp16 = load_model(args.cnn_ckpt, cache_dir=args.cache_dir).half().to("cuda").eval()
 
